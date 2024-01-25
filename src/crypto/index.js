@@ -13,13 +13,6 @@ const allocU8 = function (l, v) {
   return chunk;
 };
 
-const allocU16 = function (l, v) {
-  let ptr = Module._malloc(l * 2);
-  let chunk = Module.HEAPU16.subarray(ptr, ptr + l);
-  chunk.fill(0);
-  return chunk;
-};
-
 /**
  * @namespace Crypto
  */
@@ -95,7 +88,7 @@ const crypto = new Promise(function (resolve) {
       const pk = allocU8(publicKey.length, publicKey);
       const m = allocU8(message.length, message);
       const s = allocU8(signature.length, signature);
-      const v = allocU16(1);
+      const v = allocU8(1, new Uint8Array(1).fill(0));
 
       const free = function () {
         Module._free(pk.byteOffset);
@@ -113,7 +106,7 @@ const crypto = new Promise(function (resolve) {
       );
       const ver = v[0];
       free();
-      return ver;
+      return ver === 1;
     };
 
     /**

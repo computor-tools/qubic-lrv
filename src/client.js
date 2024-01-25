@@ -557,8 +557,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
                                     K12(message.subarray(BROADCAST_TICK.COMPUTOR_INDEX_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET), receivedTick.digest, crypto.DIGEST_LENGTH);
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
-                            
-                                    if (schnorrq.verify(receivedTick.computorPublicKey, receivedTick.digest, receivedTick.signature) === 1) {
+                                    if (schnorrq.verify(receivedTick.computorPublicKey, receivedTick.digest, receivedTick.signature)) {
                                         let offset = 0;
                                         const essence = new Uint8Array(BROADCAST_TICK.MILLISECOND_LENGTH + 5 + crypto.DIGEST_LENGTH + 4 * crypto.DIGEST_LENGTH);
                                         new DataView(essence.buffer, essence.byteOffset).setUint16(offset, receivedTick.millisecond, true);
