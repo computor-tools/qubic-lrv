@@ -114,7 +114,8 @@ export const inferEpoch = function() {
     let year =  now.getUTCFullYear() - 2000;
     let month = now.getUTCMonth();
     const day = now.getUTCDate();
-    return ((Math.floor((year += (2000 - (month = (month + 9) % 12) / 10)) * 365 + year / 4 - year / 100 + year / 400 + (month * 306 + 5) / 10 + day - 1) - 738570) / 7) - (now.getUTCHours() < 12 ? 1 : 0);
+    const days = (Math.floor((year += (2000 - (month = (month + 9) % 12) / 10)) * 365 + year / 4 - year / 100 + year / 400 + (month * 306 + 5) / 10 + day - 1) - 738570);
+    return Math.floor(days / 7) - (days % 7 === 0 && now.getUTCHours() < 12 ? 1 : 0);
 };
 
 const merkleRoot = async function (spectrumIndex, digest, siblings, root) {
