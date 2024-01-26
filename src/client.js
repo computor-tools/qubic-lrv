@@ -223,11 +223,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                     for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
                         if (storedTicks[i] !== undefined) {
-                            const quorumFlags = Array(NUMBER_OF_COMPUTORS).fill(false);
-                            quorumFlags[i] = true;
-
-                            let numberOfAlignedVotes = 1;
-
                             const saltedDigest = new Uint8Array(crypto.DIGEST_LENGTH);
                             const saltedData = new Uint8Array(crypto.PUBLIC_KEY_LENGTH + crypto.DIGEST_LENGTH);
 
@@ -237,8 +232,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
 
                             if (equal(saltedDigest, storedTicks[i].saltedSpectrumDigest)) {
-                                for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {                        
-                                    if (storedTicks[j] !== undefined && j !== i) {
+                                const quorumFlags = Array(NUMBER_OF_COMPUTORS).fill(false);
+                                quorumFlags[i] = true;
+
+                                let numberOfAlignedVotes = 1;
+
+                                for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
+                                    if (j !== i && storedTicks[j] !== undefined) {
                                         if (equal(storedTicks[i].essenceDigest, storedTicks[j].essenceDigest)) {
                                             saltedData.set(storedTicks[j].computorPublicKey);
                                             K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
@@ -297,12 +297,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         break;
                                     }
                                 }
-                            } else {
-                                if (quorumTickRequestingInterval !== undefined) {
-                                    clearInterval(quorumTickRequestingInterval);
-                                    quorumTickRequestingInterval = undefined;
-                                    requestCurrentTickInfo(respondedEntity.peer);
-                                }
                             }
 
                             if (isValid) {
@@ -311,6 +305,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         }
 
                         if (i > NUMBER_OF_COMPUTORS - QUORUM) {
+                            if (!isValid) { // entity data race artifact
+                                if (quorumTickRequestingInterval !== undefined) {
+                                    clearInterval(quorumTickRequestingInterval);
+                                    quorumTickRequestingInterval = undefined;
+                                    requestCurrentTickInfo(respondedEntity.peer);
+                                }
+                            }
                             break;
                         }
                     }
@@ -660,7 +661,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         (await crypto).K12(message.slice(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET + BROADCAST_TICK.TICK_LENGTH), respondedEntity.digest, crypto.DIGEST_LENGTH);
 
                         if (entities.has(respondedEntity.publicKey)) {
-                            if (respondedEntity.spectrumIndex > -1) { 
+                            if (respondedEntity.spectrumIndex > -1) {
                                 let tickEntities = entitiesByTick.get(respondedEntity.tick)
                                 if (tickEntities === undefined) {
                                     tickEntities = new Map();
