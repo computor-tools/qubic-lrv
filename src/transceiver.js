@@ -55,6 +55,7 @@ import { NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH } from './constants.js';
 
 const CORE_PORT = 21841;
 
+export const MIN_NUMBER_OF_PUBLIC_PEERS = 4;
 export const MAX_NUMBER_OF_PUBLIC_PEERS = 1024;
 export const PEER_ROTATION_PERIOD = 2 * 60 * 1000;
 
@@ -134,8 +135,11 @@ export const BROADCAST_COMPUTORS = {
     get PUBLIC_KEYS_OFFSET() {
         return this.EPOCH_OFFSET + this.EPOCH_LENGTH;
     },
+    get PUBLIC_KEYS_LENGTH() {
+        return NUMBER_OF_COMPUTORS * crypto.PUBLIC_KEY_LENGTH;
+    },
     get SIGNATURE_OFFSET() {
-        return this.PUBLIC_KEYS_OFFSET + crypto.PUBLIC_KEY_LENGTH * NUMBER_OF_COMPUTORS;
+        return this.PUBLIC_KEYS_OFFSET + this.PUBLIC_KEYS_LENGTH;
     },
 
     get LENGTH() {
@@ -661,7 +665,7 @@ export const createMessage = function (type, contentSize) {
         payloadSize = contentSize + REQUEST_RESPONSE_HEADER.LENGTH - MAX_LENGTH;
     }
 
-    const message = new Uint8Array((payloadSize && NETWORK_MESSAGES[type].hasOwnProperty('length')) ? NETWORK_MESSAGES[type].length(payloadSize) : NETWORK_MESSAGES[type].LENGTH);
+    const message = new Uint8Array(type === BROADCAST_TRANSACTION.TYPE ? BROADCAST_TRANSACTION.MIN_LENGTH : NETWORK_MESSAGES[type].LENGTH);
     const messageView = new DataView(message.buffer, message.byteOffset);
   
     message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET] = message.byteLength;
@@ -727,21 +731,33 @@ export const createTransceiver = function (receiveCallback) {
     const peers = {
         [COMMUNICATION_PROTOCOLS.TCP]: [],
     };
+    const handshakedPeers = new Set();
     const ignoredPeers = new Set();
+    const uniqueInitialPeers = new Set();
+    const initiallyExchangedPeers = [];
+    let initialHandshakesDone = false;
 
     const _receiveCallback = function (message, peer) {
         switch (peer.protocol) {
             case COMMUNICATION_PROTOCOLS.TCP:
                 switch (message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET]) {
                     case EXCHANGE_PUBLIC_PEERS.TYPE:
-                        for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
-                            const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
-                            if (!ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
-                                if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
-                                    publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
-                                } else {
-                                    publicPeers[peer.protocol].push(receivedAddress);
+                        if (!handshakedPeers.has(peer.address)) {
+                            handshakedPeers.add(peer.address);
+                            uniqueInitialPeers.add(peer.address);
+                            for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
+                                const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
+                                if (!ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
+                                    if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
+                                        publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
+                                    } else {
+                                        publicPeers[peer.protocol].push(receivedAddress);
+                                    }
                                 }
+                            }
+
+                            if (!initialHandshakesDone) {
+                                initiallyExchangedPeers.push({ message, peer });
                             }
                         }
                         break;
@@ -749,7 +765,18 @@ export const createTransceiver = function (receiveCallback) {
                 break;
         }
 
-        if (typeof receiveCallback === 'function') {
+        if (!initialHandshakesDone) {
+            if (message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === EXCHANGE_PUBLIC_PEERS.TYPE) {
+                if (uniqueInitialPeers.size >= MIN_NUMBER_OF_PUBLIC_PEERS) {
+                    if (typeof receiveCallback === 'function') {
+                        for (let i = 0; i < initiallyExchangedPeers.length; i++) {
+                            receiveCallback(initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
+                        }
+                    }
+                    initialHandshakesDone = true;
+                }
+            }
+        } else if (typeof receiveCallback === 'function') {
             receiveCallback(message, peer);
         }
     };
@@ -919,7 +946,7 @@ export const createTransceiver = function (receiveCallback) {
                         while (remainingBytes > 0) {
                             const size = messageSize(buffer);
                             if (size <= remainingBytes) {
-                                _receiveCallback(buffer.slice(0, size), peer);
+                                _receiveCallback(buffer.slice(0, size), _peer);
                                 buffer = buffer.slice(size);
                             } else {
                                 break;
@@ -959,8 +986,21 @@ export const createTransceiver = function (receiveCallback) {
                     options[i] = {
                         address: options[i],
                     };
+                } else if (options[i].address === undefined) {
+                    throw new Error('Invalid options, missing address.');
                 }
+            }
 
+            const uniqueAddresses = new Set();
+            for (let i = 0; i < options.length; i++) {
+                uniqueAddresses.add(options[i].address);
+            }
+
+            if (numberOfPeers + uniqueAddresses.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
+                throw new Error('Insuffient number of peers');
+            }
+
+            for (let i = 0; i < options.length; i++) {    
                 if (options[i].protocol === undefined) {
                     options[i].protocol = COMMUNICATION_PROTOCOLS.DEFAULT;
                 } else {

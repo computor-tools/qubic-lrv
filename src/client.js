@@ -52,6 +52,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import EventEmitter from 'events';
 import crypto from './crypto/index.js';
+import { CHECKPOINT } from './checkpoint.js';
 import {
     ARBITRATOR_BYTES,
     NUMBER_OF_COMPUTORS,
@@ -74,9 +75,11 @@ import {
     RESPOND_ENTITY,
     createMessage,
     createTransceiver,
+    MIN_NUMBER_OF_PUBLIC_PEERS,
 } from './transceiver.js';
 import {
     bytes64ToString,
+    stringToBytes64,
     digestBytesToString,
     bytesToId,
     idToBytes,
@@ -84,6 +87,7 @@ import {
     bigUint64ToString,
     NULL_BIG_UINT64_STRING,
     NULL_DIGEST_STRING,
+    NULL_ID_STRING,
 } from './converter.js';
 
 export const isZero = function (array) {
@@ -149,6 +153,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
     return function () {
         const that = this;
         const epochs = new Map();
+        const uniquePeersByEpoch = new Map();
         const ticks = new Map();
         const quorumTicks = new Map();
         
@@ -430,6 +435,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         const receivedComputors = {
                             epoch: messageView.getUint16(BROADCAST_COMPUTORS.EPOCH_OFFSET, true),
                             computorPublicKeys: new Array(NUMBER_OF_COMPUTORS).fill(new Uint8Array(crypto.PUBLIC_KEY_LENGTH)),
+                            computorPublicKeyStrings: new Array(NUMBER_OF_COMPUTORS).fill(NULL_ID_STRING),
 
                             digest: new Uint8Array(crypto.DIGEST_LENGTH),
                             signature: message.subarray(BROADCAST_COMPUTORS.SIGNATURE_OFFSET),
@@ -438,44 +444,104 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         };
                         const inferredEpoch = inferEpoch();
 
-                        if (receivedComputors.epoch > inferredEpoch) {
-                            peer.ignore();
-                        } else if (receivedComputors.epoch > system.epoch) {
+                        if (receivedComputors.epoch <= inferredEpoch) {
                             const { K12, schnorrq } = await crypto;
 
                             K12(message.subarray(BROADCAST_COMPUTORS.EPOCH_OFFSET, BROADCAST_COMPUTORS.SIGNATURE_OFFSET), receivedComputors.digest, crypto.DIGEST_LENGTH);
 
                             if (schnorrq.verify(await ARBITRATOR_BYTES, receivedComputors.digest, receivedComputors.signature)) {
+                                if (system.epoch === 0) {
+                                    const checkpointBytes = new Uint8Array(BROADCAST_COMPUTORS.EPOCH_LENGTH + BROADCAST_COMPUTORS.PUBLIC_KEYS_LENGTH);
+                                    const checkpointBytesView = new DataView(checkpointBytes.buffer, checkpointBytes.byteOffset);
+                                    const checkpoint = {
+                                        epoch: CHECKPOINT.epoch,
+                                        computorPublicKeys: checkpointBytes.slice(BROADCAST_COMPUTORS.EPOCH_LENGTH),
+                                        computorPublicKeyStrings: CHECKPOINT.computorPublicKeys,
+
+                                        digest: new Uint8Array(crypto.DIGEST_LENGTH),
+                                        signature: stringToBytes64(CHECKPOINT.signature),
+
+                                        faultyComputorFlags: new Array(NUMBER_OF_COMPUTORS).fill(false),
+                                    };
+
+                                    checkpointBytesView.setUint16(0, CHECKPOINT.epoch, true);
+                                    for (let i = 0, offset = BROADCAST_COMPUTORS.EPOCH_LENGTH; i < NUMBER_OF_COMPUTORS; i++, offset += crypto.PUBLIC_KEY_LENGTH) {
+                                        checkpointBytes.set(await idToBytes(CHECKPOINT.computorPublicKeys[i]), offset);
+                                    }
+
+                                    K12(checkpointBytes, checkpoint.digest, crypto.DIGEST_LENGTH);
+
+                                    if (schnorrq.verify(await ARBITRATOR_BYTES, checkpoint.digest, checkpoint.signature)) {
+                                        epochs.set((system.epoch = CHECKPOINT.epoch), checkpoint);
+                                    } else {
+                                        throw new Error('Invalid checkpoint signature!');
+                                    }
+                                }
+
                                 if (epochs.has(receivedComputors.epoch)) {
-                                    if (equal(epochs.get(receivedComputors.epoch).diget)) {
-                                        requestCurrentTickInfo(peer);
+                                    if (equal(epochs.get(receivedComputors.epoch).digest, receivedComputors.digest)) {
+                                        uniquePeersByEpoch.get(receivedComputors.epoch).add(peer.address);
+
+                                        for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
+                                            if (!epochs.has(i) || uniquePeersByEpoch.get(i).size < Math.floor(MIN_NUMBER_OF_PUBLIC_PEERS * 2 / 3)) {
+                                                return;
+                                            }
+                                        }
+                                        for (let i = system.epoch; i < inferredEpoch; i++) {
+                                            let numberOfReplacedComputors = 0;
+    
+                                            for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
+                                                if (epochs.get(i + 1).computorPublicKeyStrings.indexOf(epochs.get(i).computorPublicKeyStrings[j]) === -1) {
+                                                    if (++numberOfReplacedComputors > NUMBER_OF_COMPUTORS - QUORUM) {
+                                                        throw new Error(`Illegal number of replaced computors! (epoch ${i + 1})`);
+                                                    }
+                                                }
+                                            }
+                                        }
+    
+                                        if (inferredEpoch > system.epoch) {
+                                            const epoch = epochs.get(inferredEpoch);
+    
+                                            system.epoch = epoch.epoch;
+    
+                                            that.emit('epoch', {
+                                                epoch: epoch.epoch,
+                                                computorPublicKeys: epoch.computorPublicKeyStrings,
+    
+                                                digest: digestBytesToString(epoch.digest),
+                                                signature: bytes64ToString(epoch.signature),
+                                            });
+    
+                                            if (quorumTickRequestingInterval !== undefined) {
+                                                clearInterval(quorumTickRequestingInterval);
+                                                quorumTickRequestingInterval = undefined;
+                                            }
+                                        }
+
+
+                                        if (quorumTickRequestingInterval === undefined) {
+                                            requestCurrentTickInfo(peer);
+                                        }
+                                    } else {
+                                        system.epoch = 0x10000;
+                                        that.emit('error', 'Select another arbitrator.');
                                     }
                                 } else {
                                     for (let i = 0, offset = BROADCAST_COMPUTORS.PUBLIC_KEYS_OFFSET; i < NUMBER_OF_COMPUTORS; i++) {
                                         receivedComputors.computorPublicKeys[i] = message.slice(offset, (offset += crypto.PUBLIC_KEY_LENGTH));
+                                        receivedComputors.computorPublicKeyStrings[i] = await bytesToId(receivedComputors.computorPublicKeys[i]);
                                     }
-                                    
-                                    system.epoch = receivedComputors.epoch;
                                     epochs.set(receivedComputors.epoch, receivedComputors);
 
-                                    that.emit('epoch', {
-                                        epoch: receivedComputors.epoch,
-                                        computorPublicKeys: await Promise.all(receivedComputors.computorPublicKeys.map(bytesToId)),
-                                        
-                                        digest: digestBytesToString(receivedComputors.digest),
-                                        signature: bytes64ToString(receivedComputors.signature),
-                                    });
-
-                                    if (quorumTickRequestingInterval !== undefined) {
-                                        clearInterval(quorumTickRequestingInterval);
-                                        quorumTickRequestingInterval = undefined;
-                                    }
-
-                                    requestCurrentTickInfo(peer);
+                                    const uniquePeers = new Set();
+                                    uniquePeers.add(peer.address);
+                                    uniquePeersByEpoch.set(receivedComputors.epoch, uniquePeers);
                                 }
                             } else {
                                 peer.ignore();
                             }
+                        } else {
+                            peer.ignore();
                         }
                     } else {
                         peer.ignore();
@@ -662,7 +728,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                         if (entities.has(respondedEntity.publicKey)) {
                             if (respondedEntity.spectrumIndex > -1) {
-                                let tickEntities = entitiesByTick.get(respondedEntity.tick)
+                                let tickEntities = entitiesByTick.get(respondedEntity.tick);
                                 if (tickEntities === undefined) {
                                     tickEntities = new Map();
                                     tickEntities.set(respondedEntity.publicKey, []);

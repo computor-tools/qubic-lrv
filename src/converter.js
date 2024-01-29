@@ -152,8 +152,8 @@ export const stringToBytes64 = function (s) {
   }
 
   const bytes = new Uint8Array(64);
-  bytes.set(stringToBytes32(string.slice(0, 4 * 14)), 0);
-  bytes.set(stringToBytes32(string.slice(4 * 14, 4 * 14 * 2)), 32);
+  bytes.set(stringToBytes32(s.slice(0, 4 * 14)), 0);
+  bytes.set(stringToBytes32(s.slice(4 * 14, 4 * 14 * 2)), 32);
   return bytes;
 }
 
@@ -190,6 +190,8 @@ export const idToBytes = async function (s) {
 
   return bytes;
 };
+
+export const NULL_ID_STRING = 'a'.repeat(60);
 
 export const digestBytesToString = bytes32ToString;
 
