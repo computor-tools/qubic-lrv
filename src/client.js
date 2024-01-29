@@ -483,7 +483,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         uniquePeersByEpoch.get(receivedComputors.epoch).add(peer.address);
 
                                         for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
-                                            if (!epochs.has(i) || uniquePeersByEpoch.get(i).size < Math.floor(MIN_NUMBER_OF_PUBLIC_PEERS * 2 / 3)) {
+                                            if (!epochs.has(i) || uniquePeersByEpoch.get(i).size < Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1) {
                                                 return;
                                             }
                                         }
