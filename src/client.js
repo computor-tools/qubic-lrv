@@ -60,9 +60,10 @@ import {
     SPECTRUM_DEPTH,
     MAX_NUMBER_OF_TICKS_PER_EPOCH,
     TARGET_TICK_DURATION,
+    TICK_TRANSACTIONS_PUBLICATION_OFFSET,
+    MAX_AMOUNT,
 } from './constants.js'
 import {
-    REQUEST_RESPONSE_HEADER,
     EXCHANGE_PUBLIC_PEERS,
     BROADCAST_COMPUTORS,
     BROADCAST_TICK,
@@ -85,50 +86,34 @@ import {
     idToBytes,
     bytesToBigUint64,
     bigUint64ToString,
-    NULL_BIG_UINT64_STRING,
-    NULL_DIGEST_STRING,
     NULL_ID_STRING,
+    shiftedHexToBytes,
+    bytesToShiftedHex,
 } from './converter.js';
+import { isZero, equal, IS_BROWSER } from './utils.js';
+import { createId } from './id.js';
+import { TRANSACTION, createTransaction, transactionObject } from './transaction.js';
+import { clearInterval } from 'timers';
 
-export const isZero = function (array) {
-    for (let i = 0; i < array.length; i++) {
-      if (array[i] !== 0) {
-        return false;
-      }
-    }
-    return true;
-}
+const importPath = Promise.resolve(!IS_BROWSER && import('node:path'));
+const importFs = Promise.resolve(!IS_BROWSER && import('node:fs'));
 
-export const equal = function (a, b) {
-    if (a.length !== b.length) {
-      return false;
-    }
-  
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] !== b[i]) {
-        return false;
-      }
-    }
-  
-    return true;
-}
+const STORED_ENTITIES_DIR = 'stored_entities';
 
 export const inferEpoch = function() {
     const now = new Date();
     let year =  now.getUTCFullYear() - 2000;
-    let month = now.getUTCMonth();
-    const day = now.getUTCDate();
-    const days = (Math.floor((year += (2000 - (month = (month + 9) % 12) / 10)) * 365 + year / 4 - year / 100 + year / 400 + (month * 306 + 5) / 10 + day - 1) - 738570);
-    return Math.floor(days / 7) - (days % 7 === 0 && now.getUTCHours() < 12 ? 1 : 0);
+    let month = now.getUTCMonth() + 1;
+
+    const days = Math.floor(year += (2000 - Math.floor((month = Math.floor((month + 9) % 12)) / 10))) * 365 + Math.floor(year / 4) - Math.floor(year / 100) + Math.floor(year / 400) + Math.floor((month * 306 + 5) / 10) + now.getUTCDate() - 1 - 738570;
+
+    return Math.floor(days / 7) + ((Math.floor(days % 7) === 0 && now.getUTCHours() < 12) ? 0 : 1);
 };
 
-const merkleRoot = async function (spectrumIndex, digest, siblings, root) {
-    if (!isZero(root)) {
-        return root;
-    }
-
+const merkleRoot = async function (spectrumIndex, digest, siblings) {
     const { K12 } = await crypto;
     const pair = new Uint8Array(crypto.DIGEST_LENGTH * 2);
+    const root = new Uint8Array(crypto.DIGEST_LENGTH);
 
     root.set(digest.slice());
 
@@ -165,9 +150,22 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
         const system = {
             epoch: 0,
             tick: 0,
+            initialTick: 0,
+            publicationTick: 0,
         };
 
+        const startupTime = Date.now();
+
+        const tickHints = new Set();
+
         let quorumTickRequestingInterval;
+        let currentTickInfoRequestingInterval;
+        let averageQuorumTickProcessingDuration = TARGET_TICK_DURATION;
+
+        let numberOfUpdatedEntities = 0;
+        let numberOfClearedTransactions = 0;
+
+        let latestQuorumTickTimestamp;
 
         const requestComputors = function (peer) {
             const message = createMessage(REQUEST_COMPUTORS.TYPE);
@@ -209,221 +207,311 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
         const requestEntity = function (peer, entity) {
             const message = createMessage(REQUEST_ENTITY.TYPE);
-            message.set(entity.publicKeyBytes, REQUEST_ENTITY.PUBLIC_KEY_OFFSET);
+            message.set(entity.publicKey, REQUEST_ENTITY.PUBLIC_KEY_OFFSET);
             message.randomizeDezavu();
             peer.transmit(message);
         };
 
-        const verify = async function (respondedEntity) {
-            let quorumTick = quorumTicks.get(respondedEntity.tick);
-            let isValid = false;
+        const verify = async function (tick, peer) {
+            let quorumTick = quorumTicks.get(tick);
 
             if (quorumTick === undefined) {
-                const storedTicks = ticks.get(respondedEntity.tick) || [];
+                const storedTicks = ticks.get(tick) || [];
+                const nextStoredTicks = ticks.get(tick + 1) || [];
 
-                if (storedTicks.filter(tick => tick !== undefined).length >= QUORUM) {
-                    const spectrumDigest = await merkleRoot(respondedEntity.spectrumIndex, respondedEntity.digest, respondedEntity.siblings, respondedEntity.spectrumDigest);
-
+                if (storedTicks.filter(tick => tick !== undefined).length >= QUORUM && nextStoredTicks.findIndex(tick => tick !== undefined) > -1) {
                     const { K12 } = await crypto;
+                    const saltedDigest = new Uint8Array(crypto.DIGEST_LENGTH);
+                    const saltedData = new Uint8Array(crypto.PUBLIC_KEY_LENGTH + crypto.DIGEST_LENGTH);
 
-                    for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
-                        if (storedTicks[i] !== undefined) {
-                            const saltedDigest = new Uint8Array(crypto.DIGEST_LENGTH);
-                            const saltedData = new Uint8Array(crypto.PUBLIC_KEY_LENGTH + crypto.DIGEST_LENGTH);
+                    for (let k = 0; k < NUMBER_OF_COMPUTORS; k++) {
+                        if (nextStoredTicks[k] !== undefined) {
+                            for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
+                                if (storedTicks[i] !== undefined) {
+                                    saltedData.set(storedTicks[i].computorPublicKey);
+                                    saltedData.set(nextStoredTicks[k].prevResourceTestingDigest, crypto.PUBLIC_KEY_LENGTH);
+                                    K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
 
-                            saltedData.set(storedTicks[i].computorPublicKey);
-                            saltedData.set(spectrumDigest, crypto.PUBLIC_KEY_LENGTH);
+                                    if (equal(saltedDigest.subarray(0, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), storedTicks[i].saltedResourceTestingDigest)) {
+                                        saltedData.set(nextStoredTicks[k].prevSpectrumDigest, crypto.PUBLIC_KEY_LENGTH);
+                                        K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
 
-                            K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
-
-                            if (equal(saltedDigest, storedTicks[i].saltedSpectrumDigest)) {
-                                const quorumFlags = Array(NUMBER_OF_COMPUTORS).fill(false);
-                                quorumFlags[i] = true;
-
-                                let numberOfAlignedVotes = 1;
-
-                                for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
-                                    if (j !== i && storedTicks[j] !== undefined) {
-                                        if (equal(storedTicks[i].essenceDigest, storedTicks[j].essenceDigest)) {
-                                            saltedData.set(storedTicks[j].computorPublicKey);
+                                        if (equal(saltedDigest, storedTicks[i].saltedSpectrumDigest)) {
+                                            saltedData.set(nextStoredTicks[k].prevUniverseDigest, crypto.PUBLIC_KEY_LENGTH);
                                             K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
-            
-                                            if (equal(saltedDigest, storedTicks[j].saltedSpectrumDigest)) {
-                                                quorumFlags[j] = true;
 
-                                                if (++numberOfAlignedVotes === QUORUM) {
-                                                    quorumTick = {
-                                                        computorIndices: storedTicks.reduce(function (acc, storedTick, k) {
-                                                            if (quorumFlags[k]) {
-                                                                acc.push(storedTick.computorIndex);
+                                            if (equal(saltedDigest, storedTicks[i].saltedUniverseDigest)) {
+                                                saltedData.set(nextStoredTicks[k].prevComputerDigest, crypto.PUBLIC_KEY_LENGTH);
+                                                K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+    
+                                                if (equal(saltedDigest, storedTicks[i].saltedComputerDigest)) {
+                                                    const quorumComputorIndices = [storedTicks[i].computorIndex];
+
+                                                    for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
+                                                        if (j !== i && storedTicks[j] !== undefined) {
+
+                                                            if (
+                                                                equal(storedTicks[i].time, storedTicks[j].time) &&
+                                                                equal(storedTicks[i].prevSpectrumDigest, storedTicks[j].prevSpectrumDigest) &&
+                                                                equal(storedTicks[i].prevUniverseDigest, storedTicks[j].prevUniverseDigest) &&
+                                                                equal(storedTicks[i].prevComputerDigest, storedTicks[j].prevComputerDigest) &&
+                                                                equal(storedTicks[i].transactionDigest, storedTicks[j].transactionDigest)
+                                                            ) {
+                                                                saltedData.set(storedTicks[j].computorPublicKey);
+                                                                saltedData.set(nextStoredTicks[k].prevResourceTestingDigest, crypto.PUBLIC_KEY_LENGTH);
+                                                                K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
+                                
+                                                                if (equal(saltedDigest.subarray(0, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), storedTicks[j].saltedResourceTestingDigest)) {
+                                                                    saltedData.set(nextStoredTicks[k].prevSpectrumDigest, crypto.PUBLIC_KEY_LENGTH);
+                                                                    K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+
+                                                                    if (equal(saltedDigest, storedTicks[j].saltedSpectrumDigest)) {
+                                                                        saltedData.set(nextStoredTicks[k].prevUniverseDigest, crypto.PUBLIC_KEY_LENGTH);
+                                                                        K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+
+                                                                        if (equal(saltedDigest, storedTicks[j].saltedUniverseDigest)) {
+                                                                            saltedData.set(nextStoredTicks[k].prevComputerDigest, crypto.PUBLIC_KEY_LENGTH);
+                                                                            K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+
+                                                                            if (equal(saltedDigest, storedTicks[j].saltedComputerDigest)) {
+                                                                                quorumComputorIndices.push(storedTicks[j].computorIndex);
+
+                                                                                if (quorumComputorIndices.length === QUORUM) {
+                                                                                    quorumTick = Object.freeze({
+                                                                                        computorIndices: Object.freeze(quorumComputorIndices),
+                                                                                        tick: storedTicks[j].tick,
+                                                                                        epoch: storedTicks[j].epoch,
+
+                                                                                        timestamp: storedTicks[j].month.toString().padStart(2, '0') + '-' + storedTicks[j].day.toString().padStart(2, '0') + '-' + storedTicks[j].year.toString() +
+                                                                                            'T' + storedTicks[j].hour.toString().padStart(2, '0') + ':' + storedTicks[j].minute.toString().padStart(2, '0') + ':' + storedTicks[j].second.toString().padStart(2, '0') + '.' + storedTicks[j].millisecond.toString().padStart(3, '0'),
+
+                                                                                        prevResourceTestingDigest: bigUint64ToString(bytesToBigUint64(storedTicks[j].prevResourceTestingDigest)),
+                                                                                        resourceTestingDigest:  bigUint64ToString(bytesToBigUint64(nextStoredTicks[k].prevResourceTestingDigest)),
+
+                                                                                        prevSpectrumDigest: digestBytesToString(storedTicks[j].prevSpectrumDigest),
+                                                                                        prevUniverseDigest: digestBytesToString(storedTicks[j].prevUniverseDigest),
+                                                                                        prevComputerDigest: digestBytesToString(storedTicks[j].prevComputerDigest),
+                                                                                        spectrumDigest: digestBytesToString(nextStoredTicks[k].prevSpectrumDigest),
+                                                                                        universeDigest: digestBytesToString(nextStoredTicks[k].prevUniverseDigest),
+                                                                                        computerDigest: digestBytesToString(nextStoredTicks[k].prevComputerDigest),
+
+                                                                                        transactionDigest: digestBytesToString(storedTicks[j].transactionDigest),
+                                                                                        expectedNextTickTransactionDigest: digestBytesToString(storedTicks[j].expectedNextTickTransactionDigest),
+                                                                                    });
+
+                                                                                    if (quorumTicks.size === numberOfStoredTicks) {
+                                                                                        quorumTicks.delete(quorumTicks.keys().next().value);
+                                                                                    }
+                                                                                    quorumTicks.set(quorumTick.tick, quorumTick);
+
+                                                                                    ticks.forEach(function (tick) {
+                                                                                        if (tick.tick <= quorumTick.tick) {
+                                                                                            ticks.delete(tick.tick);
+                                                                                            voteFlags.delete(tick.tick);
+                                                                                        }
+                                                                                    });
+
+                                                                                    tickHints.forEach(function (tickHint) {
+                                                                                        if (tickHint <= quorumTick) {
+                                                                                            tickHints.delete(tickHint);
+                                                                                        }
+                                                                                    });
+
+                                                                                    break;
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
-                                                            return acc;
-                                                        }, []),
-                                                        tick: storedTicks[j].tick,
-                                                        epoch: storedTicks[j].epoch,
-                                                        
-                                                        timestamp: storedTicks[j].month.toString().padStart(2, '0') + '-' + storedTicks[j].day.toString().padStart(2, '0') + '-' + storedTicks[j].year.toString() +
-                                                            'T' + storedTicks[j].hour.toString().padStart(2, '0') + ':' + storedTicks[j].minute.toString().padStart(2, '0') + ':' + storedTicks[j].second.toString().padStart(2, '0') + '.' + storedTicks[j].millisecond.toString().padStart(3, '0'),
-                                                        
-                                                        prevResourceTestingDigest: bigUint64ToString(bytesToBigUint64(storedTicks[j].prevResourceTestingDigest)),
-                                                        resourceTestingDigest:  bigUint64ToString(bytesToBigUint64(NULL_BIG_UINT64_STRING)),
-
-                                                        prevSpectrumDigest: digestBytesToString(storedTicks[j].prevSpectrumDigest),
-                                                        prevUniverseDigest: digestBytesToString(storedTicks[j].prevUniverseDigest),
-                                                        prevComputerDigest: digestBytesToString(storedTicks[j].prevComputerDigest),
-                                                        spectrumDigest: digestBytesToString(spectrumDigest),
-                                                        universeDigest: NULL_DIGEST_STRING,
-                                                        computerDigest: NULL_DIGEST_STRING,
-
-                                                        transactionDigest: digestBytesToString(storedTicks[j].transactionDigest),
-                                                        expectedNextTickTransactionDigest: digestBytesToString(storedTicks[j].expectedNextTickTransactionDigest),
-                                                    };
-
-                                                    if (quorumTicks.size === numberOfStoredTicks) {
-                                                        quorumTicks.delete(quorumTicks.keys().next().value);
-                                                    }
-                                                    quorumTicks.set(quorumTick.tick, quorumTick);
-
-                                                    ticks.forEach(function (tick) {
-                                                        if (tick.tick <= quorumTick.tick) {
-                                                            ticks.delete(tick.tick);
-                                                            voteFlags.delete(tick.tick);
                                                         }
-                                                    });
-
-                                                    isValid = true;
-                                                    break;
+                                                    
+                                                        if (quorumComputorIndices.length + (NUMBER_OF_COMPUTORS - j) < QUORUM) {
+                                                            break;
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
 
-                                    if (numberOfAlignedVotes + (NUMBER_OF_COMPUTORS - j) < QUORUM) {
+                                    if (quorumTick) {
                                         break;
                                     }
                                 }
-                            }
 
-                            if (isValid) {
-                                break;
+                                if (i > NUMBER_OF_COMPUTORS - QUORUM) {
+                                    return;
+                                }
                             }
                         }
 
-                        if (i > NUMBER_OF_COMPUTORS - QUORUM) {
-                            if (!isValid) { // entity data race artifact
-                                if (quorumTickRequestingInterval !== undefined) {
-                                    clearInterval(quorumTickRequestingInterval);
-                                    quorumTickRequestingInterval = undefined;
-                                    requestCurrentTickInfo(respondedEntity.peer);
-                                }
-                            }
+                        if (quorumTick) {
                             break;
                         }
                     }
                 }
-            } else if (digestBytesToString(await merkleRoot(respondedEntity.spectrumIndex, respondedEntity.digest, respondedEntity.siblings, respondedEntity.spectrumDigest)) === quorumTick.spectrumDigest) {
-                isValid = true;
             }
 
-            if (isValid) {
+            if (quorumTick) {
                 if (system.tick < quorumTick.tick) {
-                    that.emit('tick', {
-                        computorIndices: quorumTick.computorIndices.slice(),
-                        epoch: quorumTick.epoch,
-                        tick: quorumTick.tick,
+                    const now = Date.now();
 
-                        timestamp: quorumTick.timestamp,
+                    if (system.tick > 0) {
+                        const stats = Object.freeze({
+                            tick: system.tick,
+                            duration: now - (latestQuorumTickTimestamp || startupTime),
+                            numberOfSkippedTicks: (quorumTick.tick - 1) - system.tick,
+                            numberOfUpdatedEntities,
+                            numberOfSkippedEntities: entities.size - numberOfUpdatedEntities,
+                            numberOfClearedTransactions,
+                        });
 
-                        prevResourceTestingDigest: quorumTick.prevResourceTestingDigest,
-                        resourceTestingDigest: quorumTick.resourceTestingDigest,
+                        that.emit('tick_stats', stats);
+                    }
 
-                        prevSpectrumDigest: quorumTick.prevSpectrumDigest,
-                        prevUniverseDigest: quorumTick.prevUniverseDigest,
-                        prevComputerDigest: quorumTick.prevComputerDigest,
-                        spectrumDigest: quorumTick.spectrumDigest,
-                        universeDigest: quorumTick.universeDigest,
-                        computerDigest: quorumTick.computerDigest,
-
-                        transactionDigest: quorumTick.transactionDigest,
-                        expectedNextTickTransactionDigest: quorumTick.expectedNextTickTransactionDigest,
-                    });
+                    latestQuorumTickTimestamp = now;
+                    averageQuorumTickProcessingDuration = Math.ceil((latestQuorumTickTimestamp - startupTime) / (quorumTick.tick - (system.initialTick || quorumTick.tick - 1)));
 
                     system.tick = quorumTick.tick;
 
-                    if (quorumTickRequestingInterval !== undefined) {
-                        clearInterval(quorumTickRequestingInterval);
-                        quorumTickRequestingInterval = undefined;
-                        requestCurrentTickInfo(respondedEntity.peer);
+                    if (system.initialTick === 0) {
+                        system.initialTick = system.tick;
+                    }
+
+                    that.emit('tick', quorumTick);
+
+                    numberOfUpdatedEntities = 0;
+                    numberOfClearedTransactions = 0;
+
+                    if (currentTickInfoRequestingInterval === undefined) {
+                        requestCurrentTickInfo(peer);
+                        currentTickInfoRequestingInterval = setInterval(() => requestCurrentTickInfo(peer), TARGET_TICK_DURATION);
                     }
                 }
 
-                for (const tickEntitiesById of entitiesByTick.get(quorumTick.tick).values()) {
-                    let validRespondedEntity;
-                    for (const anotherRespondedEntity of tickEntitiesById) {
-                        if (!digestBytesToString(await merkleRoot(anotherRespondedEntity.index, anotherRespondedEntity.digest, anotherRespondedEntity.siblings, anotherRespondedEntity.spectrumDigest)) === quorumTick.spectrumDigest) {
-                            anotherRespondedEntity.peer.ignore();
-                        } else {
-                            validRespondedEntity = anotherRespondedEntity;
-                        }
-                    }
-
-                    if (validRespondedEntity !== undefined) {
-                        const entity = entities.get(validRespondedEntity.publicKey);
-
-                        if (entity !== undefined && (entity.tick === undefined || entity.tick < quorumTick.tick)) {
-                            entity.incomingAmount = validRespondedEntity.incomingAmount;
-                            entity.outgoingAmount = validRespondedEntity.outgoingAmount;
-                            entity.numberOfIncommingTransfers = validRespondedEntity.numberOfIncommingTransfers;
-                            entity.numberOfOutgoingTransfers = validRespondedEntity.numberOfOutgoingTransfers;
-                            entity.latestIncomingTransferTick = validRespondedEntity.latestIncomingTransferTick;
-                            entity.latestOutgoingTransferTick = validRespondedEntity.latestOutgoingTransferTick;
-
-                            entity.epoch = quorumTick.epoch;
-                            entity.tick = quorumTick.tick;
-                            entity.timestamp = quorumTick.timestamp;
-
-                            entity.digest = digestBytesToString(validRespondedEntity.digest);
-                            entity.siblings = Array(SPECTRUM_DEPTH);
-                            for (let i = 0; i < SPECTRUM_DEPTH; i++) {
-                                entity.siblings.push(digestBytesToString(validRespondedEntity.siblings.subarray(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH)));
+                if (entitiesByTick.has(quorumTick.tick)) {
+                    for (const tickEntities of entitiesByTick.get(quorumTick.tick).values()) {
+                        for (const respondedEntity of tickEntities) {
+                            if (isZero(respondedEntity.spectrumDigest)) {
+                                respondedEntity.spectrumDigest = await merkleRoot(respondedEntity.spectrumIndex, respondedEntity.digest, respondedEntity.siblings);
                             }
-                            entity.spectrumIndex = validRespondedEntity.spectrumIndex;
-                            entity.spectrumDigest = digestBytesToString(validRespondedEntity.spectrumDigest);
-                        
-                            that.emit('entity', {
-                                publicKey: entity.publicKey,
-                                energy: entity.incomingAmount - entity.outgoingAmount,
-                                incomingAmount: entity.incomingAmount,
-                                outgoingAmount: entity.outgoingAmount,
-                                numberOfIncommingTransfers: entity.numberOfIncommingTransfers,
-                                numberOfOutgoingTransfers: entity.numberOfOutgoingTransfers,
-                                latestIncomingTransferTick: entity.latestIncomingTransferTick,
-                                latestOutgoingTransferTick: entity.latestOutgoingTransferTick,
 
-                                epoch: entity.epoch,
-                                tick: entity.tick,
-                                timestamp: entity.timestamp,
+                            if (digestBytesToString(respondedEntity.spectrumDigest) === quorumTick.spectrumDigest) {
+                                const entity = entities.get(respondedEntity.id);
 
-                                digest: entity.digest,
-                                siblings: entity.siblings,
-                                spectrumIndex: entity.spectrumIndex,
-                                spectrumDigest: entity.spectrumDigest,
-                            });
+                                if (entity !== undefined && (entity.tick === undefined || entity.tick < quorumTick.tick)) {
+                                    entity.tick = quorumTick.tick;
+
+                                    let outgoingTransaction;
+
+                                    if (entity.outgoingTransaction !== undefined && entity.outgoingTransaction.tick <= quorumTick.tick) {
+                                        outgoingTransaction = Object.freeze({
+                                            sourceId: entity.outgoingTransaction.sourceId,
+                                            destinationId: entity.outgoingTransaction.destinationId,
+                                            amount: entity.outgoingTransaction.amount,
+                                            tick: entity.tick,
+                                            inputType: entity.outgoingTransaction.inputType,
+                                            input: entity.outgoingTransaction.input,
+                                            digest: entity.outgoingTransaction.digest,
+                                            signature: entity.outgoingTransaction.signature,
+                                            ...((entity.outgoingTransaction.contractIPO_BidQuantity > 0) ? {
+                                                contractIPO_BidPrice: entity.outgoingTransaction.contractIPO_BidPrice,
+                                                contractIPO_BidQuantity: entity.outgoingTransaction.contractIPO_BidQuantity,
+                                                contractIPO_BidAmount: entity.outgoingTransaction.contractIPO_BidAmount,
+                                            } : {}),
+                                            executedContractIndex: entity.outgoingTransaction.executedContractIndex,
+                                            executed: ((entity.outgoingTransaction.destinationId !== entity.id && (entity.outgoingTransaction.amount > 0n || entity.outgoingTransaction.contractIPO_BidQuantity > 0)) &&
+                                                respondedEntity.latestOutgoingTransferTick === entity.outgoingTransaction.tick && entity.numberOfOutgoingTransfers < respondedEntity.numberOfOutgoingTransfers),
+                                        });
+
+                                        entity.outgoingTransaction = undefined;
+
+                                        if (IS_BROWSER) {
+                                            localStorage.removeItem(entity.id);
+                                        } else {
+                                            const path = await importPath;
+                                            const fs = await importFs;
+        
+                                            const file = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id);
+        
+                                            if (fs.existsSync(file)) {
+                                                fs.unlinkSync(file);
+                                            }
+                                        }
+
+                                        if (outgoingTransaction.destinationId !== entity.id && (outgoingTransaction.amount > 0n || outgoingTransaction.contractIPO_BidPrice > 0n)) {                                            
+                                            that.emit('transfer', outgoingTransaction);
+                                        }
+
+                                        numberOfClearedTransactions++;
+                                    }
+        
+                                    entity.incomingAmount = respondedEntity.incomingAmount;
+                                    entity.outgoingAmount = respondedEntity.outgoingAmount;
+                                    entity.energy = entity.incomingAmount - entity.outgoingAmount;
+                                    entity.numberOfIncomingTransfers = respondedEntity.numberOfIncomingTransfers;
+                                    entity.numberOfOutgoingTransfers = respondedEntity.numberOfOutgoingTransfers;
+        
+                                    entity.latestIncomingTransferTick = respondedEntity.latestIncomingTransferTick;
+                                    entity.latestOutgoingTransferTick = respondedEntity.latestOutgoingTransferTick;
+        
+                                    entity.epoch = quorumTick.epoch;
+                                    entity.timestamp = quorumTick.timestamp;
+        
+                                    entity.digest = digestBytesToString(respondedEntity.digest);
+                                    entity.siblings = Object.freeze(Array(SPECTRUM_DEPTH).fill('').map((_, i) => digestBytesToString(respondedEntity.siblings.subarray(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH))));
+                                    entity.spectrumIndex = respondedEntity.spectrumIndex;
+                                    entity.spectrumDigest = digestBytesToString(respondedEntity.spectrumDigest);
+
+                                    numberOfUpdatedEntities++;
+
+                                    that.emit('entity', Object.freeze({
+                                        id: entity.id,
+                                        energy: entity.energy,
+                                        incomingAmount: entity.incomingAmount,
+                                        outgoingAmount: entity.outgoingAmount,
+                                        numberOfIncomingTransfers: entity.numberOfIncomingTransfers,
+                                        numberOfOutgoingTransfers: entity.numberOfOutgoingTransfers,
+                                        latestIncomingTransferTick: entity.latestIncomingTransferTick,
+                                        latestOutgoingTransferTick: entity.latestOutgoingTransferTick,
+        
+                                        tick: entity.tick = quorumTick.tick,
+                                        epoch: entity.epoch,
+                                        timestamp: entity.timestamp = quorumTick.timestamp,
+        
+                                        digest: entity.digest = digestBytesToString(respondedEntity.digest),
+                                        siblings: entity.siblings,
+                                        spectrumIndex: entity.spectrumIndex,
+                                        spectrumDigest: entity.spectrumDigest,
+        
+                                        ...(outgoingTransaction ?  { outgoingTransaction } : {}),
+                                    }));
+        
+                                    if ((entity.outgoingTransaction === undefined || entity.outgoingTransaction.tick <= system.tick) && entity.emitter) {
+                                        entity.emitter.emit('publication_tick', system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
+                                    }
+                                }
+
+                                if (entitiesByTick.has(quorumTick.tick)) {
+                                    entitiesByTick.get(quorumTick.tick).delete(respondedEntity.id);
+                                    if (entitiesByTick.get(quorumTick.tick).size === 0) {
+                                        entitiesByTick.delete(quorumTick.tick);
+                                    }
+                                }
+
+                                break;
+                            } else {
+                                // anotherRespondedEntity.peer.ignore(); // fix later, entity could be invalid because of data race.
+                            }
                         }
                     }
                 }
-
-                entitiesByTick.forEach(function (tickEntitiesById) {
-                    const tick = tickEntitiesById.entries().next().value.tick;
-                    if (tick <= system.tick) {
-                        entitiesByTick.delete(tick);
-                    }
-                });
             }
         };
 
-        const receiveCallback = async function (message, peer) {
-            switch (message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET]) {
+        const receiveCallback = async function (type, message, peer) {
+            switch (type) {
                 case EXCHANGE_PUBLIC_PEERS.TYPE:
                     requestComputors(peer);
                     break;
@@ -483,7 +571,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         uniquePeersByEpoch.get(receivedComputors.epoch).add(peer.address);
 
                                         for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
-                                            if (!epochs.has(i) || uniquePeersByEpoch.get(i).size < Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1) {
+                                            if (!epochs.has(i) || (uniquePeersByEpoch.get(i).size < (Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1))) {
                                                 return;
                                             }
                                         }
@@ -511,15 +599,10 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                                 digest: digestBytesToString(epoch.digest),
                                                 signature: bytes64ToString(epoch.signature),
                                             });
-    
-                                            if (quorumTickRequestingInterval !== undefined) {
-                                                clearInterval(quorumTickRequestingInterval);
-                                                quorumTickRequestingInterval = undefined;
-                                            }
                                         }
 
 
-                                        if (quorumTickRequestingInterval === undefined) {
+                                        if (quorumTickRequestingInterval === undefined && currentTickInfoRequestingInterval === undefined) {
                                             requestCurrentTickInfo(peer);
                                         }
                                     } else {
@@ -560,6 +643,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             epoch,
                             tick: messageView.getUint32(BROADCAST_TICK.TICK_OFFSET, true),
 
+                            time: message.subarray(BROADCAST_TICK.TIME_OFFSET, BROADCAST_TICK.TIME_OFFSET + BROADCAST_TICK.TIME_LENGTH),
                             millisecond: messageView.getUint16(BROADCAST_TICK.MILLISECOND_OFFSET, true),
                             second: message[BROADCAST_TICK.SECOND_OFFSET],
                             minute: message[BROADCAST_TICK.MINUTE_OFFSET],
@@ -569,7 +653,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             year: message[BROADCAST_TICK.YEAR_OFFSET],
 
                             prevResourceTestingDigest: message.subarray(BROADCAST_TICK.PREV_RESOURCE_TESTING_DIGEST_OFFSET, BROADCAST_TICK.PREV_RESOURCE_TESTING_DIGEST_OFFSET + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH),
-                            saltedResourceTestingDigest: message.subarray(BROADCAST_TICK.SALTED_RESOURCE_TESTING_DIGEST_OFFSET, BROADCAST_TICK.PREV_RESOURCE_TESTING_DIGEST_OFFSET + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH),
+                            saltedResourceTestingDigest: message.subarray(BROADCAST_TICK.SALTED_RESOURCE_TESTING_DIGEST_OFFSET, BROADCAST_TICK.SALTED_RESOURCE_TESTING_DIGEST_OFFSET + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH),
 
                             prevSpectrumDigest: message.subarray(BROADCAST_TICK.PREV_SPECTRUM_DIGEST_OFFSET, BROADCAST_TICK.PREV_SPECTRUM_DIGEST_OFFSET + crypto.DIGEST_LENGTH),
                             prevUniverseDigest: message.subarray(BROADCAST_TICK.PREV_UNIVERSE_DIGEST_OFFSET, BROADCAST_TICK.PREV_UNIVERSE_DIGEST_OFFSET + crypto.DIGEST_LENGTH),
@@ -583,8 +667,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                             digest: new Uint8Array(crypto.DIGEST_LENGTH),
                             signature: message.subarray(BROADCAST_TICK.SIGNATURE_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET + crypto.SIGNATURE_LENGTH),
-
-                            essenceDigest: new Uint8Array(crypto.DIGEST_LENGTH),
                         };
 
                         if (receivedTick.epoch === inferEpoch() && receivedTick.epoch === system.epoch && receivedTick.tick > system.tick) {
@@ -596,24 +678,26 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     receivedTick.month > 0 &&
                                     receivedTick.month <= 12 &&
                                     receivedTick.day > 0 &&
-                                    receivedTick.day <= ((
-                                    receivedTick.month == 1 ||
-                                    receivedTick.month == 3 ||
-                                    receivedTick.month == 5 ||
-                                    receivedTick.month == 7 ||
-                                    receivedTick.month == 8 ||
-                                    receivedTick.month == 10 ||
-                                    receivedTick.month == 12
-                                    ) ? 31
-                                    : ((
-                                        receivedTick.month == 4 ||
-                                        receivedTick.month == 6 ||
-                                        receivedTick.month == 9 ||
-                                        receivedTick.month == 11
-                                    ) ? 30
-                                        : ((receivedTick.year & 3)
-                                        ? 28
-                                        : 29))) &&
+                                    receivedTick.day <= (
+                                        (
+                                            receivedTick.month == 1 ||
+                                            receivedTick.month == 3 ||
+                                            receivedTick.month == 5 ||
+                                            receivedTick.month == 7 ||
+                                            receivedTick.month == 8 ||
+                                            receivedTick.month == 10 ||
+                                            receivedTick.month == 12
+                                        ) ? 31 : (
+                                            (
+                                                receivedTick.month == 4 ||
+                                                receivedTick.month == 6 ||
+                                                receivedTick.month == 9 ||
+                                                receivedTick.month == 11
+                                            ) ? 30 : (
+                                                (receivedTick.year & 3) ? 28 : 29
+                                            )
+                                        )
+                                    ) &&
                                     receivedTick.hour <= 23 &&
                                     receivedTick.minute <= 59 &&
                                     receivedTick.second <= 59 &&
@@ -624,48 +708,32 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
                                     K12(message.subarray(BROADCAST_TICK.COMPUTOR_INDEX_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET), receivedTick.digest, crypto.DIGEST_LENGTH);
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
-                                    if (schnorrq.verify(receivedTick.computorPublicKey, receivedTick.digest, receivedTick.signature)) {
-                                        let offset = 0;
-                                        const essence = new Uint8Array(BROADCAST_TICK.MILLISECOND_LENGTH + 5 + crypto.DIGEST_LENGTH + 4 * crypto.DIGEST_LENGTH);
-                                        new DataView(essence.buffer, essence.byteOffset).setUint16(offset, receivedTick.millisecond, true);
-                                        essence[(offset += BROADCAST_TICK.MILLISECOND_LENGTH)] = receivedTick.second;
-                                        essence[++offset] = receivedTick.minute;
-                                        essence[++offset] = receivedTick.hour;
-                                        essence[++offset] = receivedTick.day;
-                                        essence[++offset] = receivedTick.month;
-                                        essence[++offset] = receivedTick.year;
-                                        essence.set(receivedTick.prevSpectrumDigest, ++offset);
-                                        essence.set(receivedTick.prevUniverseDigest, (offset += crypto.DIGEST_LENGTH));
-                                        essence.set(receivedTick.prevComputerDigest, (offset += crypto.DIGEST_LENGTH));
-                                        essence.set(receivedTick.transactionDigest, offset + crypto.DIGEST_LENGTH);
-                                        K12(essence, receivedTick.essenceDigest, crypto.DIGEST_LENGTH);
 
+                                    if (schnorrq.verify(receivedTick.computorPublicKey, receivedTick.digest, receivedTick.signature)) {
                                         const storedTick = ticks.get(receivedTick.tick)?.[computorIndex];
 
                                         if (storedTick === undefined) {
                                             if (ticks.get(receivedTick.tick) === undefined) {
                                                 ticks.set(receivedTick.tick, Array(NUMBER_OF_COMPUTORS).fill(undefined));
                                             }
+
                                             ticks.get(receivedTick.tick)[computorIndex] = receivedTick;
 
-                                            const tickEntities = entitiesByTick.get(receivedTick.tick);
-                                            if (tickEntities !== undefined) {
-                                                tickEntities.forEach(function (tickEntitiesById) {
-                                                    tickEntitiesById.forEach(entity => verify(entity));
-                                                });
-                                            }
-                                        } else {
-                                            if (equal(receivedTick.essenceDigest, storedTick.essenceDigest)) {
-                                                if (isZero(ticks.get(receivedTick.tick)[computorIndex].expectedNextTickTransactionDigest)) {
-                                                    ticks.get(receivedTick.tick)[computorIndex] = receivedTick;
-                                                } else if (!equal(ticks.get(receivedTick.tick)[computorIndex].expectedNextTickTransactionDigest, receivedTick.expectedNextTickTransactionDigest)) {
-                                                    epochs.get(epoch).faultyComputorFlags[computorIndex] = true;
-                                                    peer.ignore();
+                                            if (ticks.get(receivedTick.tick).filter(t => t !== undefined).length > 0 && (ticks.get(receivedTick.tick - 1)?.filter(t => t !== undefined) || []).length >= QUORUM) {
+                                                if (entitiesByTick.has(receivedTick.tick - 1) || entities.size === 0) {
+                                                    verify(receivedTick.tick - 1, peer);
                                                 }
-                                            } else {
-                                                epochs.get(epoch).faultyComputorFlags[computorIndex] = true;
-                                                peer.ignore();
                                             }
+                                        } else if (
+                                            !equal(receivedTick.time, storedTick.time) &&
+                                            !equal(receivedTick.prevSpectrumDigest, storedTick.prevSpectrumDigest) &&
+                                            !equal(receivedTick.prevUniverseDigest, storedTick.prevUniverseDigest) &&
+                                            !equal(receivedTick.prevComputerDigest, storedTick.prevComputerDigest) &&
+                                            !equal(receivedTick.transactionDigest, storedTick.transactionDigest) &&
+                                            !equal(receivedTick.expectedNextTickTransactionDigest, storedTick.expectedNextTickTransactionDigest)
+                                        ) {
+                                            epochs.get(epoch).faultyComputorFlags[computorIndex] = true;
+                                            peer.ignore();
                                         }
                                     } else {
                                         peer.ignore();
@@ -681,25 +749,47 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                     break;
 
                 case RESPOND_CURRENT_TICK_INFO.TYPE:
-                    if (quorumTickRequestingInterval === undefined) {
-                        if (message.length === RESPOND_CURRENT_TICK_INFO.LENGTH) {
-                            const messageView = new DataView(message.buffer, message.byteOffset);
-                            const tickHint = messageView.getUint32(RESPOND_CURRENT_TICK_INFO.TICK_OFFSET, true);
+                    if (message.length === RESPOND_CURRENT_TICK_INFO.LENGTH) {
+                        const messageView = new DataView(message.buffer, message.byteOffset);
+                        const tickHint = messageView.getUint32(RESPOND_CURRENT_TICK_INFO.TICK_OFFSET, true);
 
-                            if (tickHint > system.tick) {
+                        if (tickHint > system.tick) {
+                            entities.forEach(function (entity) {
+                                requestEntity(peer, entity);
+                            });
+
+                            clearInterval(currentTickInfoRequestingInterval);
+                            currentTickInfoRequestingInterval = undefined;
+                            if (!tickHints.has(tickHint)) {
+                                tickHints.add(tickHint);
+
                                 requestQuorumTick(peer, tickHint);
-                                quorumTickRequestingInterval = setInterval(() => {
-                                    if (tickHint > system.tick) {
-                                        requestQuorumTick(peer, tickHint);
-                                    } else {
-                                        clearInterval(quorumTickRequestingInterval);
-                                        quorumTickRequestingInterval = undefined;
-                                    }
-                                }, TARGET_TICK_DURATION / 10);
+                                requestQuorumTick(peer, tickHint + 1);
 
-                                entities.forEach(function (entity) {
-                                    requestEntity(peer, entity);
-                                });
+                                clearInterval(quorumTickRequestingInterval);
+                                quorumTickRequestingInterval = setInterval(() => {
+                                    let tick = tickHint > system.tick ? tickHint : system.tick + 1;
+                                    if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
+                                        requestQuorumTick(peer, tick);
+                                    }
+                                    if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
+                                        requestQuorumTick(peer, tick + 1);
+                                    }
+
+                                    if ((ticks.get(tick) || []).filter(t => t !== undefined).length >= QUORUM) {
+                                        tick += 2;
+                                        if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
+                                            requestQuorumTick(peer, tick);
+                                        }
+                                        if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
+                                            requestQuorumTick(peer, tick + 1);
+                                        }
+                                    }
+                                }, TARGET_TICK_DURATION);
+                            }
+                        } else {
+                            if (currentTickInfoRequestingInterval === undefined) {
+                                currentTickInfoRequestingInterval = setInterval(() => requestCurrentTickInfo(peer), TARGET_TICK_DURATION);
                             }
                         }
                     }
@@ -709,10 +799,10 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                     if (message.length === RESPOND_ENTITY.LENGTH) {
                         const messageView = new DataView(message.buffer, message.byteOffset);
                         const respondedEntity = {
-                            publicKey: await bytesToId(message.subarray(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH)),
+                            id: await bytesToId(message.subarray(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH)),
                             incomingAmount: messageView.getBigUint64(RESPOND_ENTITY.INCOMING_AMOUNT_OFFSET, true),
                             outgoingAmount: messageView.getBigUint64(RESPOND_ENTITY.OUTGOING_AMOUNT_OFFSET, true),
-                            numberOfIncommingTransfers: messageView.getUint32(RESPOND_ENTITY.NUMBER_OF_INCOMING_TRANSFERS_OFFSET, true),
+                            numberOfIncomingTransfers: messageView.getUint32(RESPOND_ENTITY.NUMBER_OF_INCOMING_TRANSFERS_OFFSET, true),
                             numberOfOutgoingTransfers: messageView.getUint32(RESPOND_ENTITY.NUMBER_OF_OUTGOING_TRANSFERS_OFFSET, true),
                             latestIncomingTransferTick: messageView.getUint32(RESPOND_ENTITY.LATEST_INCOMING_TRANSFER_TICK_OFFSET, true),
                             latestOutgoingTransferTick: messageView.getUint32(RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET, true),
@@ -726,22 +816,22 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                         (await crypto).K12(message.slice(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET + BROADCAST_TICK.TICK_LENGTH), respondedEntity.digest, crypto.DIGEST_LENGTH);
 
-                        if (entities.has(respondedEntity.publicKey)) {
+                        if (entities.has(respondedEntity.id)) {
                             if (respondedEntity.spectrumIndex > -1) {
                                 let tickEntities = entitiesByTick.get(respondedEntity.tick);
                                 if (tickEntities === undefined) {
                                     tickEntities = new Map();
-                                    tickEntities.set(respondedEntity.publicKey, []);
+                                    tickEntities.set(respondedEntity.id, []);
                                     entitiesByTick.set(respondedEntity.tick, tickEntities);
-                                } else if (!tickEntities.has(respondedEntity.publicKey)) {
-                                    entitiesByTick.set(respondedEntity.publicKey, []);
+                                } else if (!tickEntities.has(respondedEntity.id)) {
+                                    tickEntities.set(respondedEntity.id, []);
                                 }
-                                tickEntities.get(respondedEntity.publicKey).push(respondedEntity);
-
-                                verify(respondedEntity);
+                                tickEntities.get(respondedEntity.id).push(respondedEntity);
+                                if (ticks.has(respondedEntity.tick) && ticks.get(respondedEntity.tick).filter(t => t !== undefined).length >= QUORUM) {
+                                   verify(respondedEntity.tick, peer);
+                                }
+                                
                             }
-                        } else {
-                            peer.ignore();
                         }
                     } else {
                         peer.ignore();
@@ -758,38 +848,240 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                 connect(options) {
                     transceiver.connect(options);
                 },
+
                 disconnect() {
                     transceiver.disconnect();
                 },
+
                 replace() {
                     transceiver.replace();
                 },
+
                 reset(options) {
                     transceiver.reset(options);
                 },
+
                 async subscribe({ id }) {
                     if (id !== undefined) {
-                        entities.set(id, {
-                            publicKey: id,
-                            publicKeyBytes: await idToBytes(id),
-                        });
+                        if (!entities.has(id)) {
+                            entities.set(id, {
+                                id,
+                                publicKey: await idToBytes(id),
+                            });
+                        }
                     }
                 },
+
                 unsubscribe({ id }) {
                     if (id !== undefined) {
-                        entities.delete(id);
+                        if (entities.has(id) && !entities.get(id).emitter) {
+                            entities.delete(id);
+                        }
                     }
                 },
-                broadcastTransaction(transaction) {
-                    const message = createMessage(BROADCAST_TRANSACTION.TYPE, transaction.byteLength);
-                    message.set(transaction, message.length - transaction.byteLength);
-                    transceiver.transmit(message);
+
+                async createEntity(privateKey) {
+
+                    return async function () {
+                        const those = this;
+
+                        const { id, publicKey } = await createId(privateKey);
+
+                        let entity = entities.get(id);
+                        if (entity === undefined) {
+                            entities.set(id, (entity = {
+                                id,
+                                publicKey,
+                                outgoingTransaction: undefined,
+                                emitter: those,
+                            }));
+                        } else {
+                            if (entity.emitter !== undefined) {
+                                throw new Error('Cannot duplicate entity.');
+                            }
+
+                            entity.outgoingTransaction = undefined;
+                            entity.emitter = those;
+                        }
+
+                        let storedTransactionBytes;
+
+                        if (IS_BROWSER) {
+                            storedTransactionBytes = shiftedHexToBytes(localStorage.getItem(id));
+                        } else {
+                            const path = await importPath;
+                            const fs = await importFs;
+
+                            const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
+                            const file = path.join(dir, id);
+                            const temp = file + '-temp';
+
+                            if (!fs.existsSync(dir)) {
+                                fs.mkdirSync(dir);
+                            } else {
+                                if (fs.existsSync(temp)) {
+                                    fs.renameSync(temp, file);
+                                }
+                            
+                                if (fs.existsSync(file)) {
+                                    const buffer = fs.readFileSync(file);
+                                    storedTransactionBytes = Uint8Array.from(buffer);
+                                }
+                            }
+                        }
+
+                        if (storedTransactionBytes !== undefined) {
+                            // TODO: decrypt
+                            const storedTransaction = await transactionObject(storedTransactionBytes);
+                        
+                            if (storedTransaction.sourceId !== id) {
+                                throw new Error('Invalid stored transaction!');
+                            }
+
+                            entity.outgoingTransaction = storedTransaction;
+                        }
+
+                        return Object.assign(
+                            those,
+                            {
+                                get id() {
+                                    return id;
+                                },
+
+                                async createTransaction(sourcePrivateKey, {
+                                    destinationId,
+                                    amount,
+                                    tick,
+                                    inputType,
+                                    input,
+                                    contractIPO_BidPrice,
+                                    contractIPO_BidQuantity,
+                                }) {
+                                    if (system.tick === 0) {
+                                        throw new Error('Failed to issue transaction, system not synchronized yet...');
+                                    }
+
+                                    if (entity.energy === undefined) {
+                                        throw new Error('Failed to issue transaction, entity not synchronized yet...');
+                                    }
+
+                                    if (entity.outgoingTransaction !== undefined) {
+                                        throw new Error(`There is pending outgoing transaction. (tick: ${entity.outgoingTransaction.tick})`);
+                                    }
+
+                                    if (typeof amount === 'bigint' && amount >= 0n && amount <= MAX_AMOUNT) {
+                                        if (amount > entity.energy) {
+                                            throw new Error('Amount exceeds possesed energy!');
+                                        }
+                                    } else {
+                                        throw new TypeError('Invalid amount!');
+                                    }
+
+                                    if (contractIPO_BidPrice !== undefined || contractIPO_BidQuantity !== undefined) {
+                                        if (
+                                            typeof contractIPO_BidPrice === 'bigint' && contractIPO_BidPrice > 0n && contractIPO_BidPrice <= TRANSACTION.MAX_CONTRACT_IPO_BID_PRICE &&
+                                            Number.isInteger(contractIPO_BidQuantity) && contractIPO_BidQuantity > 0 && contractIPO_BidQuantity <= TRANSACTION.MAX_CONTRACT_IPO_BID_QUANTITY
+                                        ) {
+                                            if (contractIPO_BidPrice * BigInt(contractIPO_BidQuantity) > entity.energy - amount) {
+                                                throw new Error('Contract IPO bid exceeds possessed energy!');
+                                            }
+                                        } else {
+                                            throw new TypeError('Invalid contract IPO bid.');
+                                        }
+                                    }
+
+                                    const saneTick = system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1;
+
+                                    if (tick !== undefined) {
+                                        if (!Number.isInteger(tick)) {
+                                            throw new TypeError('Invalid transaction tick!');
+                                        }
+                                        if (tick < saneTick) {
+                                            throw new RangeError('Transaction tick not far enough in the future...');
+                                        }
+                                        if (tick - system.tick > Math.floor((60 * 1000) / TARGET_TICK_DURATION)) { // avoid timelocks as a result of setting tick too far in the future.
+                                            throw new RangeError('Transaction tick too far in the future!');
+                                        }
+                                    } else {
+                                        tick = saneTick;
+                                    }
+                
+                                    const transaction = await createTransaction(sourcePrivateKey, {
+                                        sourcePublicKey: publicKey,
+                                        destinationId,
+                                        amount,
+                                        tick,
+                                        inputType,
+                                        input,
+                                        contractIPO_BidPrice,
+                                        contractIPO_BidQuantity,
+                                    });
+
+                                    if (IS_BROWSER) {
+                                        // TODO: encrypt
+                                        localStorage.setItem(id, bytesToShiftedHex(transaction.bytes));
+                                    } else {
+                                        const path = await importPath;
+                                        const fs = await importFs;
+
+                                        const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
+                                        const file = path.join(dir, id);
+                                        const temp = file + '-temp';
+
+                                        if (!fs.existsSync(dir)) {
+                                            fs.mkdirSync(dir);
+                                        }
+
+                                        // TODO: encrypt
+                                        fs.writeFileSync(temp, Uint8Array.from(transaction.bytes));
+                                        fs.renameSync(temp, file);
+                                    }
+                
+                                    return (entity.outgoingTransaction = transaction);
+                                },
+                                broadcastTransaction() {
+                                    if (entity.outgoingTransaction && entity.outgoingTransaction.tick > system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET) {
+                                        const message = createMessage(BROADCAST_TRANSACTION.TYPE, entity.outgoingTransaction.bytes.length);
+                                        message.set(entity.outgoingTransaction.bytes, 0);
+
+                                        for (let i = 0; i <= TICK_TRANSACTIONS_PUBLICATION_OFFSET; i++) {
+                                            setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
+                                        }
+                                    }
+                                },
+                            },
+                            EventEmitter.prototype,
+                        );
+                    }.call({});
                 },
+
                 get tick() {
                     return quorumTicks.get(system.tick);
                 },
-                get tickOffset() {
-                    // TODO
+
+                publicationTick() {
+                    if (system.tick > 0) {
+                        return Promise.resolve(system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
+                    }
+
+                    return new Promise(function (resolve) {
+                        that.once('tick', function (tick) {
+                            resolve(tick.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
+                        });
+                    });
+                },
+
+                broadcastTransaction(transaction) {
+                    if (transaction.tick >= system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + 1) {
+                        const message = createMessage(BROADCAST_TRANSACTION.TYPE, transaction.bytes.byteLength);
+                        message.set(transaction.bytes, message.length - transaction.bytes.byteLength);
+
+                        transceiver.transmit(message);
+
+                        for (let i = 1; i < TICK_TRANSACTIONS_PUBLICATION_OFFSET + 1; i++) {
+                            setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
+                        }
+                    }
                 },
             },
             EventEmitter.prototype,

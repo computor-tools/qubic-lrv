@@ -52,6 +52,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import crypto from './crypto/index.js';
 import { NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH } from './constants.js';
+import { TRANSACTION } from './transaction.js';
 
 const CORE_PORT = 21841;
 
@@ -90,7 +91,7 @@ export const EXCHANGE_PUBLIC_PEERS = {
 
     NUMBER_OF_EXCHANGED_PEERS: 4,
     ADDRESS_LENGTH: 4,
-    EXCHANGED_PEERS_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    EXCHANGED_PEERS_OFFSET: 0,
     get EXCHANGED_PEERS_LENGTH() {
         return this.NUMBER_OF_EXCHANGED_PEERS * this.ADDRESS_LENGTH;
     },
@@ -102,7 +103,7 @@ export const EXCHANGE_PUBLIC_PEERS = {
 export const BROADCAST_MESSAGE = {
     TYPE: 1,
 
-    SOURCE_PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    SOURCE_PUBLIC_KEY_OFFSET: 0,
     get DESTINATION_PUBLIC_KEY_OFFSET() {
         return this.SOURCE_PUBLIC_KEY_OFFSET + crypto.DIGEST_LENGTH;
     },
@@ -130,7 +131,7 @@ export const BROADCAST_MESSAGE = {
 export const BROADCAST_COMPUTORS = {
     TYPE: 2,
 
-    EPOCH_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    EPOCH_OFFSET: 0,
     EPOCH_LENGTH: 2,
     get PUBLIC_KEYS_OFFSET() {
         return this.EPOCH_OFFSET + this.EPOCH_LENGTH;
@@ -150,7 +151,7 @@ export const BROADCAST_COMPUTORS = {
 export const BROADCAST_TICK = {
     TYPE: 3,
 
-    COMPUTOR_INDEX_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    COMPUTOR_INDEX_OFFSET: 0,
     COMPUTOR_INDEX_LENGTH: 2,
     get EPOCH_OFFSET() {
         return this.COMPUTOR_INDEX_OFFSET + this.COMPUTOR_INDEX_LENGTH
@@ -159,10 +160,14 @@ export const BROADCAST_TICK = {
     get TICK_OFFSET() {
         return this.EPOCH_OFFSET + this.EPOCH_LENGTH;
     },
-    TICK_LENGTH: 4,
+    TICK_LENGTH: TRANSACTION.TICK_LENGTH,
 
-    get MILLISECOND_OFFSET() {
+    get TIME_OFFSET() {
         return this.TICK_OFFSET + this.TICK_LENGTH;
+    },
+    TIME_LENGTH: 8,
+    get MILLISECOND_OFFSET() {
+        return this.TIME_OFFSET;
     },
     MILLISECOND_LENGTH: 2,
     get SECOND_OFFSET() {
@@ -225,24 +230,17 @@ export const BROADCAST_TICK = {
     get LENGTH() {
         return this.SIGNATURE_OFFSET + crypto.SIGNATURE_LENGTH;
     },
-
-    get ESSENCE_OFFSET() {
-        return this.MILLISECOND_OFFSET;
-    },
-    get ESSENCE_LENGTH() {
-        return this.PREV_RESOURCE_TESTING_DIGEST_OFFSET - this.ESSENCE_OFFSET + this.SALTED_SPECTRUM_DIGEST_OFFSET - this.PREV_SPECTRUM_DIGEST_OFFSET;
-    },
 };
 
 export const REQUEST_COMPUTORS = {
     TYPE: 11,
-    LENGTH: REQUEST_RESPONSE_HEADER.LENGTH,
+    LENGTH: 0,
 };
 
 export const REQUEST_QUORUM_TICK = {
     TYPE: 14,
 
-    TICK_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    TICK_OFFSET: 0,
     TICK_LENGTH: BROADCAST_TICK.LENGTH,
     get VOTE_FLAGS_OFFSET() {
         return this.TICK_OFFSET + this.TICK_LENGTH;
@@ -257,29 +255,29 @@ export const REQUEST_QUORUM_TICK = {
 export const BROADCAST_TRANSACTION = {
     TYPE: 24,
 
-    SOURCE_PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    SOURCE_PUBLIC_KEY_OFFSET: 0,
     get DESTINATION_PUBLIC_KEY_OFFSET() {
         return this.SOURCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
     },
     get AMOUNT_OFFSET() {
         return this.DESTINATION_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
     },
-    AMOUNT_LENGTH: 8,
+    AMOUNT_LENGTH: TRANSACTION.AMOUNT_LENGTH,
     get TICK_OFFSET() {
         return this.AMOUNT_OFFSET + this.AMOUNT_LENGTH;
     },
-    TICK_LENGTH: BROADCAST_TICK.TICK_LENGTH,
+    TICK_LENGTH: TRANSACTION.TICK_LENGTH,
     
     get INPUT_TYPE_OFFSET() {
         return this.TICK_OFFSET + this.TICK_LENGTH;
     },
-    INPUT_TYPE_LENGTH: 2,
+    INPUT_TYPE_LENGTH: TRANSACTION.INPUT_TYPE_LENGTH,
     get INPUT_SIZE_OFFSET() {
         return this.INPUT_TYPE_OFFSET + this.INPUT_TYPE_LENGTH;
     },
-    INPUT_SIZE_LENGTH: 2,
+    INPUT_SIZE_LENGTH: TRANSACTION.INPUT_SIZE_LENGTH,
 
-    MAX_INPUT_SIZE: BROADCAST_MESSAGE.MAX_PAYLOAD_SIZE,
+    MAX_INPUT_SIZE: TRANSACTION.MAX_INPUT_SIZE,
 
     get MIN_LENGTH() {
         return this.INPUT_SIZE_OFFSET + this.INPUT_SIZE_LENGTH + crypto.SIGNATURE_LENGTH;
@@ -308,13 +306,13 @@ export const BROADCAST_TRANSACTION = {
 
 export const REQUEST_CURRENT_TICK_INFO = {
     TYPE: 27,
-    LENGTH: REQUEST_RESPONSE_HEADER.LENGTH,
+    LENGTH: 0,
 };
 
 export const RESPOND_CURRENT_TICK_INFO = {
     TYPE: 28,
 
-    TICK_DURATION_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    TICK_DURATION_OFFSET: 0,
     TICK_DURATION_LENGTH: 2,
     get EPOCH_OFFSET() {
         return this.TICK_DURATION_OFFSET + this.TICK_DURATION_LENGTH;
@@ -347,7 +345,7 @@ export const RESPOND_CURRENT_TICK_INFO = {
 export const REQUEST_ENTITY = {
     TYPE: 31,
 
-    PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    PUBLIC_KEY_OFFSET: 0,
 
     get LENGTH() {
         return this.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
@@ -357,7 +355,7 @@ export const REQUEST_ENTITY = {
 export const RESPOND_ENTITY = {
     TYPE: 32,
 
-    PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    PUBLIC_KEY_OFFSET: 0,
     AMOUNT_LENGTH: BROADCAST_TRANSACTION.AMOUNT_LENGTH,
     get INCOMING_AMOUNT_OFFSET() {
         return this.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
@@ -399,7 +397,7 @@ export const RESPOND_ENTITY = {
 export const REQUEST_CONTRACT_IPO = {
     TYPE: 33,
     
-    CONTRACT_INDEX_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    CONTRACT_INDEX_OFFSET: 0,
     CONTRACT_INDEX_LENGTH: 4,
 
     get LENGTH() {
@@ -410,7 +408,7 @@ export const REQUEST_CONTRACT_IPO = {
 export const RESPOND_CONTRACT_IPO = {
     TYPE: 34,
 
-    CONTRACT_INDEX_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    CONTRACT_INDEX_OFFSET: 0,
     CONTRACT_INDEX_LENGTH: REQUEST_CONTRACT_IPO.CONTRACT_INDEX_LENGTH,
     get TICK_OFFSET() {
         return this.CONTRACT_INDEX_OFFSET + this.CONTRACT_INDEX_LENGTH;
@@ -438,7 +436,7 @@ export const RESPOND_CONTRACT_IPO = {
 export const REQUEST_ISSUED_ASSETS = {
     TYPE: 36,
 
-    PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    PUBLIC_KEY_OFFSET: 0,
 
     get LENGTH() {
         return this.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
@@ -448,7 +446,7 @@ export const REQUEST_ISSUED_ASSETS = {
 export const RESPOND_ISSUED_ASSETS = {
     TYPE: 37,
 
-    ISSUANCE_PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    ISSUANCE_PUBLIC_KEY_OFFSET: 0,
     TYPE_LENGTH: 1,
     TYPES: {
         EMPTY: 0,
@@ -497,7 +495,7 @@ export const RESPOND_ISSUED_ASSETS = {
 export const REQUEST_OWNED_ASSETS = {
     TYPE: 38,
 
-    PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    PUBLIC_KEY_OFFSET: 0,
 
     get LENGTH() {
         return this.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
@@ -543,7 +541,7 @@ export const RESPOND_OWNED_ASSETS = {
 export const REQUEST_POSSESSED_ASSETS = {
     TYPE: 40,
 
-    PUBLIC_KEY_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    PUBLIC_KEY_OFFSET: 0,
 
     get LENGTH() {
         return this.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
@@ -589,12 +587,12 @@ export const RESPOND_POSSESSED_ASSETS = {
 export const REQUEST_CONTRACT_FUNCTION = {
     TYPE: 42,
 
-    CONTRACT_INDEX_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    CONTRACT_INDEX_OFFSET: 0,
     CONTRACT_INDEX_LENGTH: REQUEST_CONTRACT_IPO.CONTRACT_INDEX_LENGTH,
     get INPUT_TYPE_OFFSET() {
         return this.CONTRACT_INDEX_OFFSET + this.CONTRACT_INDEX_LENGTH;
     },
-    INPUT_TYPE_LENGTH: BROADCAST_TRANSACTION.INPUT_LENGTH,
+    INPUT_TYPE_LENGTH: BROADCAST_TRANSACTION.INPUT_TYPE_LENGTH,
     get INPUT_SIZE_OFFSET() {
         return this.INPUT_TYPE_OFFSET + this.INPUT_TYPE_LENGTH;
     },
@@ -622,7 +620,7 @@ export const REQUEST_CONTRACT_FUNCTION = {
 export const RESPOND_CONTRACT_FUNCTION = {
     TYPE: 43,
 
-    OUTPUT_OFFSET: REQUEST_RESPONSE_HEADER.LENGTH,
+    OUTPUT_OFFSET: 0,
     
     // Variable-size output; the size must be 0 if the invocation has failed for whatever reason (e.g. no a function registered for [inputType], or the function has timed out)
 };
@@ -655,17 +653,14 @@ const messageSize = function (message) {
 };
 
 export const createMessage = function (type, contentSize) {
-    let payloadSize;
-
     if (contentSize) {
         const MAX_LENGTH = NETWORK_MESSAGES[type].MAX_LENGTH || NETWORK_MESSAGES[type].LENGTH;
         if (REQUEST_RESPONSE_HEADER.LENGTH + contentSize > MAX_LENGTH) {
             throw new RangeError(`Invalid content size. Expected ${MAX_LENGTH}bytes at most.`);
         }
-        payloadSize = contentSize + REQUEST_RESPONSE_HEADER.LENGTH - MAX_LENGTH;
     }
 
-    const message = new Uint8Array(type === BROADCAST_TRANSACTION.TYPE ? BROADCAST_TRANSACTION.MIN_LENGTH : NETWORK_MESSAGES[type].LENGTH);
+    const message = new Uint8Array(contentSize ? REQUEST_RESPONSE_HEADER.LENGTH + contentSize : REQUEST_RESPONSE_HEADER.LENGTH + NETWORK_MESSAGES[type].LENGTH);
     const messageView = new DataView(message.buffer, message.byteOffset);
   
     message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET] = message.byteLength;
@@ -673,12 +668,6 @@ export const createMessage = function (type, contentSize) {
     message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 2] = message.byteLength >> 16;
 
     message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] = type;
-
-    const verifyOffset = function (offset) {
-        if (offset < REQUEST_RESPONSE_HEADER.LENGTH) {
-            throw new RangeError(`Request field offset must exceed header length (${REQUEST_RESPONSE_HEADER.LENGTH}bytes).`);
-        }
-    };
 
     return {
         get size() {
@@ -702,24 +691,19 @@ export const createMessage = function (type, contentSize) {
             return this.dejavu;
         },
         set(array, offset) {
-            verifyOffset(offset);
-            message.set(array.slice(), offset);
+            message.set(array.slice(), REQUEST_RESPONSE_HEADER.LENGTH + offset);
         },
         setUint8(offset, value) {
-            verifyOffset(offset);
-            message[offset] = value;
+            message[REQUEST_RESPONSE_HEADER.LENGTH + offset] = value;
         },
         setUint16(offset, value) {
-            verifyOffset(offset);
-            messageView.setUint16(offset, value, true);
+            messageView.setUint16(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
         },
         setUint32(offset, value) {
-            verifyOffset(offset);
-            messageView.setUint32(offset, value, true);
+            messageView.setUint32(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
         },
         setBigUint64(offset, value) {
-            verifyOffset(offset);
-            messageView.setBigUint64(offset, value, true);
+            messageView.setBigUint64(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
         },
     };
 };
@@ -731,23 +715,24 @@ export const createTransceiver = function (receiveCallback) {
     const peers = {
         [COMMUNICATION_PROTOCOLS.TCP]: [],
     };
-    const handshakedPeers = new Set();
     const ignoredPeers = new Set();
     const uniqueInitialPeers = new Set();
     const initiallyExchangedPeers = [];
     let initialHandshakesDone = false;
 
-    const _receiveCallback = function (message, peer) {
+    let numberOfPeers = 0;
+
+    const _receiveCallback = function (type, message, peer) {
         switch (peer.protocol) {
             case COMMUNICATION_PROTOCOLS.TCP:
-                switch (message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET]) {
+                switch (type) {
                     case EXCHANGE_PUBLIC_PEERS.TYPE:
-                        if (!handshakedPeers.has(peer.address)) {
-                            handshakedPeers.add(peer.address);
+                        if (!uniqueInitialPeers.has(peer.address)) {
                             uniqueInitialPeers.add(peer.address);
                             for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
                                 const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
-                                if (!ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
+
+                                if (receivedAddress !== '0.0.0.0' && !ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
                                     if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
                                         publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
                                     } else {
@@ -770,14 +755,14 @@ export const createTransceiver = function (receiveCallback) {
                 if (uniqueInitialPeers.size >= MIN_NUMBER_OF_PUBLIC_PEERS) {
                     if (typeof receiveCallback === 'function') {
                         for (let i = 0; i < initiallyExchangedPeers.length; i++) {
-                            receiveCallback(initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
+                            receiveCallback(EXCHANGE_PUBLIC_PEERS.TYPE, initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
                         }
                     }
                     initialHandshakesDone = true;
                 }
             }
         } else if (typeof receiveCallback === 'function') {
-            receiveCallback(message, peer);
+            receiveCallback(type, message, peer);
         }
     };
 
@@ -946,7 +931,7 @@ export const createTransceiver = function (receiveCallback) {
                         while (remainingBytes > 0) {
                             const size = messageSize(buffer);
                             if (size <= remainingBytes) {
-                                _receiveCallback(buffer.slice(0, size), _peer);
+                                _receiveCallback(buffer[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], buffer.slice(REQUEST_RESPONSE_HEADER.LENGTH, size), _peer);
                                 buffer = buffer.slice(size);
                             } else {
                                 break;
@@ -965,8 +950,6 @@ export const createTransceiver = function (receiveCallback) {
                 break;
         }
     };
-
-    let numberOfPeers = 0;
 
     return {
         get numberOfPeers() {

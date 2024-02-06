@@ -179,7 +179,7 @@ export const bytesToId = async function (bytes) {
 
 export const idToBytes = async function (s) {
   if (new RegExp(`^[A-Z]{${60}}$`).test(s) === false) {
-    throw new Error('Invalid public key string. Expected 60 uppercase latin chars.');
+    throw new Error('Invalid id. Expected 60 uppercase latin chars.');
   }
 
   const bytes = stringToBytes32(s.slice(0, 56).toLowerCase());

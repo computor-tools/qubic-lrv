@@ -50,22 +50,27 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import { idToBytes } from './converter.js';
+export const isZero = function (array) {
+    for (let i = 0; i < array.length; i++) {
+        if (array[i] !== 0) {
+            return false;
+        }
+    }
+    return true;
+};
 
-export const ARBITRATOR = 'AFZPUAIYVPNUYGJRQVLUKOPPVLHAZQTGLYAAUUNBXFTVTAMSBKQBLEIEPCVJ';
-export const ARBITRATOR_BYTES = idToBytes(ARBITRATOR);
+export const equal = function (a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
 
-export const NUMBER_OF_COMPUTORS = 676;
-export const QUORUM = Math.floor((2 / 3) * NUMBER_OF_COMPUTORS) + 1;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
 
-export const SPECTRUM_DEPTH = 24;
+  return true;
+};
 
-export const TARGET_TICK_DURATION = 3000;
-export const MAX_NUMBER_OF_TICKS_PER_EPOCH = (((((60 * 60 * 24 * 7) / (TARGET_TICK_DURATION / 1000)) + NUMBER_OF_COMPUTORS - 1) / NUMBER_OF_COMPUTORS) * NUMBER_OF_COMPUTORS);
-
-export const ISSUANCE_RATE = 1000000000000n;
-export const MAX_AMOUNT = ISSUANCE_RATE * 1000n;
-
-export const MAX_NUMBER_OF_CONTRACTS = 1024;
-
-export const TICK_TRANSACTIONS_PUBLICATION_OFFSET = 2; // must be only 2.
+export const IS_BROWSER = (typeof window !== 'undefined') && (typeof window.document !== 'undefined');

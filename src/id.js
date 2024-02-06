@@ -50,22 +50,59 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import { idToBytes } from './converter.js';
+import crypto from './crypto/index.js';
+import { ALPHABET, bytesToId, stringToSeedBytes } from './converter.js';
 
-export const ARBITRATOR = 'AFZPUAIYVPNUYGJRQVLUKOPPVLHAZQTGLYAAUUNBXFTVTAMSBKQBLEIEPCVJ';
-export const ARBITRATOR_BYTES = idToBytes(ARBITRATOR);
+export const SEED_LENGTH = 55;
 
-export const NUMBER_OF_COMPUTORS = 676;
-export const QUORUM = Math.floor((2 / 3) * NUMBER_OF_COMPUTORS) + 1;
+export const createPrivateKey = async function (seed, index = 0) {
+    if (Object.prototype.toString.call(seed) === '[object Uint8Array]' && seed.byteLength !== SEED_LENGTH) {
+        for (let i = 0; i < seed.length; i++) {
+            if (seed[i] > ALPHABET.indexOf('z')) {
+                throw new TypeError('Invalid seed.');
+            }
+        }
+    } else {
+        if (new RegExp(`^[a-z]{${SEED_LENGTH}}$`).test(seed) === false) {
+            throw new TypeError('Invalid seed.');
+        }
 
-export const SPECTRUM_DEPTH = 24;
+        seed = stringToSeedBytes(seed);
+    }
 
-export const TARGET_TICK_DURATION = 3000;
-export const MAX_NUMBER_OF_TICKS_PER_EPOCH = (((((60 * 60 * 24 * 7) / (TARGET_TICK_DURATION / 1000)) + NUMBER_OF_COMPUTORS - 1) / NUMBER_OF_COMPUTORS) * NUMBER_OF_COMPUTORS);
+    if (!Number.isInteger(index)) {
+        throw new TypeError('Invalid index');
+    }
 
-export const ISSUANCE_RATE = 1000000000000n;
-export const MAX_AMOUNT = ISSUANCE_RATE * 1000n;
+    const { K12 } = await crypto;
 
-export const MAX_NUMBER_OF_CONTRACTS = 1024;
+    const privateKey = new Uint8Array(crypto.PRIVATE_KEY_LENGTH);
+    const preimage = seed.slice();
 
-export const TICK_TRANSACTIONS_PUBLICATION_OFFSET = 2; // must be only 2.
+    while (index-- > 0) {
+        for (let i = 0; i < preimage.length; i++) {
+            if (++preimage[i] > ALPHABET.length) {
+                preimage[i] = 1;
+            } else {
+                break;
+            }
+        }
+    }
+    K12(preimage, privateKey, crypto.PRIVATE_KEY_LENGTH);
+
+    return privateKey;
+};
+
+export const createId = async function (privateKey) {
+    if (Object.prototype.toString.call(privateKey) !== '[object Uint8Array]' || privateKey.byteLength !== crypto.PRIVATE_KEY_LENGTH) {
+        throw new TypeError('Invalid private key.');
+    }
+
+    const { schnorrq } = await crypto;
+    const publicKey = schnorrq.generatePublicKey(privateKey);
+
+    return Object.freeze({
+        id: await bytesToId(publicKey),
+        publicKey: Object.freeze(Array.from(publicKey)),
+    });
+}
