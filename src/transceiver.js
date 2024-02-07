@@ -716,33 +716,39 @@ export const createTransceiver = function (receiveCallback) {
         [COMMUNICATION_PROTOCOLS.TCP]: [],
     };
     const ignoredPeers = new Set();
-    const uniqueInitialPeers = new Set();
+    const initialPeers = new Set();
+    const initialHandshakingPeers = new Set();
     const initiallyExchangedPeers = [];
     let initialHandshakesDone = false;
 
     let numberOfPeers = 0;
+
+    const setPublicPeers = function (message, peer) {
+        for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
+            const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
+
+            if (receivedAddress !== '0.0.0.0' && !ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
+                if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
+                    publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
+                } else {
+                    publicPeers[peer.protocol].push(receivedAddress);
+                }
+            }
+        }
+    };
 
     const _receiveCallback = function (type, message, peer) {
         switch (peer.protocol) {
             case COMMUNICATION_PROTOCOLS.TCP:
                 switch (type) {
                     case EXCHANGE_PUBLIC_PEERS.TYPE:
-                        if (!uniqueInitialPeers.has(peer.address)) {
-                            uniqueInitialPeers.add(peer.address);
-                            for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
-                                const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
-
-                                if (receivedAddress !== '0.0.0.0' && !ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
-                                    if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
-                                        publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
-                                    } else {
-                                        publicPeers[peer.protocol].push(receivedAddress);
-                                    }
-                                }
-                            }
+                        if (initialHandshakingPeers.size < MIN_NUMBER_OF_PUBLIC_PEERS && initialPeers.has(peer.address) && !initialHandshakingPeers.has(peer.address)) {
+                            initialHandshakingPeers.add(peer.address);
 
                             if (!initialHandshakesDone) {
                                 initiallyExchangedPeers.push({ message, peer });
+                            } else {
+                                setPublicPeers(message, peer);
                             }
                         }
                         break;
@@ -752,10 +758,11 @@ export const createTransceiver = function (receiveCallback) {
 
         if (!initialHandshakesDone) {
             if (message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === EXCHANGE_PUBLIC_PEERS.TYPE) {
-                if (uniqueInitialPeers.size >= MIN_NUMBER_OF_PUBLIC_PEERS) {
+                if (initialHandshakingPeers.size === MIN_NUMBER_OF_PUBLIC_PEERS) {
                     if (typeof receiveCallback === 'function') {
                         for (let i = 0; i < initiallyExchangedPeers.length; i++) {
                             receiveCallback(EXCHANGE_PUBLIC_PEERS.TYPE, initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
+                            setPublicPeers(initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
                         }
                     }
                     initialHandshakesDone = true;
@@ -823,21 +830,15 @@ export const createTransceiver = function (receiveCallback) {
                     publicPeers[protocol].push(address);
                 }
 
-                if (publicPeers[protocol].length > 0) {
-                    const anotherAddress = publicPeers[protocol].splice(Math.floor(Math.random() * publicPeers[protocol].length), 1)[0];
-                    const i = peers[protocol].findIndex((peer) => peer.address === address);
-                    if (peers[protocol][i] !== undefined) {
-                        peers[protocol][i].address = anotherAddress;
-                    }
-
-                    setTimeout(function () {
-                        _connect({ protocol, port, address: anotherAddress || address, rotationPeriod }, peerIndex);
-                    }, 0);
-                } else {
-                    setTimeout(function () {
-                        connect();
-                    }, 1000);
+                const anotherAddress = publicPeers[protocol].splice(Math.floor(Math.random() * publicPeers[protocol].length), 1)[0];
+                const i = peers[protocol].findIndex((peer) => peer.address === address);
+                if (peers[protocol][i] !== undefined) {
+                    peers[protocol][i].address = anotherAddress;
                 }
+
+                setTimeout(function () {
+                    _connect({ protocol, port, address: anotherAddress || address, rotationPeriod }, peerIndex);
+                }, 1000);
             }
         };
 
@@ -964,6 +965,7 @@ export const createTransceiver = function (receiveCallback) {
                 }
             }
 
+
             for (let i = 0; i < options.length; i++) {
                 if (typeof options[i] === 'string') {
                     options[i] = {
@@ -1009,6 +1011,10 @@ export const createTransceiver = function (receiveCallback) {
                     options[i].rotationPeriod = PEER_ROTATION_PERIOD;
                 }
 
+                if (initialPeers.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
+                    initialPeers.add(options[i].address);
+                }
+
                 _connect(options[i], numberOfPeers++);
             }
         },
@@ -1032,6 +1038,10 @@ export const createTransceiver = function (receiveCallback) {
             }
         },
         reset(options) {
+            initialPeers.clear();
+            initialHandshakingPeers.clear();
+            initiallyExchangedPeers.length = 0;
+            initialHandshakesDone = false;
             for (let protocol in peers) {
                 if (peers.hasOwnProperty(protocol)) {
                     publicPeers[protocol] = [];
