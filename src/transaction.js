@@ -115,7 +115,7 @@ export const TRANSACTION = {
     },
 };
 
-export const transactionObject = async function (transaction) {
+export const inspectTransaction = async function (transaction) {
     if ((MAX_NUMBER_OF_CONTRACTS - 1) > Number.MAX_SAFE_INTEGER) {
         throw new TypeError('Assumed contract index to be safe integer.');
     }
@@ -259,5 +259,5 @@ export const createTransaction = async function (sourcePrivateKey, {
 
     transaction.set(schnorrq.sign(sourcePrivateKey, sourcePublicKey, digest), TRANSACTION.INPUT_OFFSET + inputSize);
 
-    return transactionObject(transaction);
+    return inspectTransaction(transaction);
 };

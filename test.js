@@ -50,38 +50,36 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import { ARBITRATOR } from './src/constants.js';
-import { createClient } from './src/client.js';
-import { createPrivateKey } from './src/id.js';
+import * as qubic from './src/client.js';
 
-const test = async function ({ seed }) {
+const test = async function ({ seed, pingPongAmount }) {
     if (process.env.PUBLIC_PEERS === undefined) {
         console.log('Error: Define PUBLIC_PEERS env var.');
         process.exit(1);
     }
 
-    const client = createClient();
-    await client.subscribe({ id: ARBITRATOR }); // subscribe to arbitrary id
+    const client = qubic.createClient();
+    await client.subscribe({ id: qubic.ARBITRATOR }); // subscribe to arbitrary id
 
     if (seed.length) {
         const privateKeys = [
-            await createPrivateKey(seed, 0),
-            await createPrivateKey(seed, 1),
+            await qubic.createPrivateKey(seed, 0),
+            await qubic.createPrivateKey(seed, 1),
         ];
         const entity = await client.createEntity(privateKeys[0]); // creating an entity, autogenerates subscription by entity.id
 
         const destinationId = (await client.createEntity(privateKeys[1])).id; // own destination
 
-        entity.on('publication_tick', async function (publicationTick) { // request suitable publication tick after syncing
+        entity.on('execution_tick', async function (tick) { // request suitable execution tick after syncing
             try {
                 const transaction = await entity.createTransaction(
                     privateKeys[0],
                     {
                         destinationId,
-                        amount: 1000n,
-                        tick: publicationTick,
+                        amount: pingPongAmount,
+                        tick,
                     }
-                ); // calling createTransaction again may fail, need to wait for another publication tick, because otherwise previous tx could be overwritten.
+                ); // calling createTransaction again may fail, need to wait for another execution tick, because otherwise previous tx could be overwritten.
             
                 console.log('Tx:', transaction.digest, transaction.tick);
             } catch (error) {
@@ -102,11 +100,12 @@ const test = async function ({ seed }) {
         }
     });
     client.addListener('transfer', (transfer) => console.log('Transfer:', transfer));
-    client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + 'skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
+    client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
 
     client.connect((process.env.PUBLIC_PEERS).split(',').map(s => s.trim())); // start the loop by listening to networked messages
 };
 
 test({
     seed: '', // add a seed to test transfers
+    pingPongAmount: 1000n,
 });

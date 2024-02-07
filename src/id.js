@@ -98,11 +98,5 @@ export const createId = async function (privateKey) {
         throw new TypeError('Invalid private key.');
     }
 
-    const { schnorrq } = await crypto;
-    const publicKey = schnorrq.generatePublicKey(privateKey);
-
-    return Object.freeze({
-        id: await bytesToId(publicKey),
-        publicKey: Object.freeze(Array.from(publicKey)),
-    });
-}
+    return bytesToId((await crypto).schnorrq.generatePublicKey(privateKey));
+};

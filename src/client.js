@@ -54,6 +54,7 @@ import EventEmitter from 'events';
 import crypto from './crypto/index.js';
 import { CHECKPOINT } from './checkpoint.js';
 import {
+    ARBITRATOR,
     ARBITRATOR_BYTES,
     NUMBER_OF_COMPUTORS,
     QUORUM,
@@ -91,16 +92,29 @@ import {
     bytesToShiftedHex,
 } from './converter.js';
 import { isZero, equal, IS_BROWSER } from './utils.js';
-import { createId } from './id.js';
-import { TRANSACTION, createTransaction, transactionObject } from './transaction.js';
-import { clearInterval } from 'timers';
+import { createPrivateKey, createId, SEED_LENGTH } from './id.js';
+import { TRANSACTION, createTransaction, inspectTransaction } from './transaction.js';
+
+export {
+    ARBITRATOR,
+    NUMBER_OF_COMPUTORS,
+    QUORUM,
+    MAX_AMOUNT,
+    SEED_LENGTH,
+    createPrivateKey,
+    createId,
+    idToBytes,
+    bytesToId,
+    createTransaction,
+    inspectTransaction,
+};
 
 const importPath = Promise.resolve(!IS_BROWSER && import('node:path'));
 const importFs = Promise.resolve(!IS_BROWSER && import('node:fs'));
 
 const STORED_ENTITIES_DIR = 'stored_entities';
 
-export const inferEpoch = function() {
+const inferEpoch = function() {
     const now = new Date();
     let year =  now.getUTCFullYear() - 2000;
     let month = now.getUTCMonth() + 1;
@@ -151,7 +165,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             epoch: 0,
             tick: 0,
             initialTick: 0,
-            publicationTick: 0,
         };
 
         const startupTime = Date.now();
@@ -400,8 +413,11 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             if (digestBytesToString(respondedEntity.spectrumDigest) === quorumTick.spectrumDigest) {
                                 const entity = entities.get(respondedEntity.id);
 
-                                if (entity !== undefined && (entity.tick === undefined || entity.tick < quorumTick.tick)) {
-                                    entity.tick = quorumTick.tick;
+                                if (entity !== undefined && ((entity.tick || 0) < (entity.tick = quorumTick.tick))) {
+                                    entitiesByTick.get(quorumTick.tick).delete(respondedEntity.id);
+                                    if (entitiesByTick.get(quorumTick.tick).size === 0) {
+                                        entitiesByTick.delete(quorumTick.tick);
+                                    }
 
                                     let outgoingTransaction;
 
@@ -410,7 +426,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             sourceId: entity.outgoingTransaction.sourceId,
                                             destinationId: entity.outgoingTransaction.destinationId,
                                             amount: entity.outgoingTransaction.amount,
-                                            tick: entity.tick,
+                                            tick: entity.outgoingTransaction.tick,
                                             inputType: entity.outgoingTransaction.inputType,
                                             input: entity.outgoingTransaction.input,
                                             digest: entity.outgoingTransaction.digest,
@@ -422,7 +438,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             } : {}),
                                             executedContractIndex: entity.outgoingTransaction.executedContractIndex,
                                             executed: ((entity.outgoingTransaction.destinationId !== entity.id && (entity.outgoingTransaction.amount > 0n || entity.outgoingTransaction.contractIPO_BidQuantity > 0)) &&
-                                                respondedEntity.latestOutgoingTransferTick === entity.outgoingTransaction.tick && entity.numberOfOutgoingTransfers < respondedEntity.numberOfOutgoingTransfers),
+                                                respondedEntity.latestOutgoingTransferTick === entity.outgoingTransaction.tick),
                                         });
 
                                         entity.outgoingTransaction = undefined;
@@ -489,14 +505,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     }));
         
                                     if ((entity.outgoingTransaction === undefined || entity.outgoingTransaction.tick <= system.tick) && entity.emitter) {
-                                        entity.emitter.emit('publication_tick', system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
-                                    }
-                                }
-
-                                if (entitiesByTick.has(quorumTick.tick)) {
-                                    entitiesByTick.get(quorumTick.tick).delete(respondedEntity.id);
-                                    if (entitiesByTick.get(quorumTick.tick).size === 0) {
-                                        entitiesByTick.delete(quorumTick.tick);
+                                        entity.emitter.emit('execution_tick', system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
                                     }
                                 }
 
@@ -504,6 +513,14 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             } else {
                                 // anotherRespondedEntity.peer.ignore(); // fix later, entity could be invalid because of data race.
                             }
+
+                            if (!entitiesByTick.get(quorumTick.tick).has(respondedEntity.id)) {
+                                break;
+                            }
+                        }
+
+                        if (!entitiesByTick.has(quorumTick.tick)) {
+                            break;
                         }
                     }
                 }
@@ -530,6 +547,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                             faultyComputorFlags: new Array(NUMBER_OF_COMPUTORS).fill(false),
                         };
+
                         const inferredEpoch = inferEpoch();
 
                         if (receivedComputors.epoch <= inferredEpoch) {
@@ -842,6 +860,15 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
         const transceiver = createTransceiver(receiveCallback);
 
+        const _broadcastTransaction = function (transactionBytes) {
+            const message = createMessage(BROADCAST_TRANSACTION.TYPE, transactionBytes.length);
+            message.set(transactionBytes, 0);
+
+            for (let i = 0; i <= TICK_TRANSACTIONS_PUBLICATION_OFFSET; i++) {
+                setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
+            }
+        }
+
         return Object.assign(
             this,
             {
@@ -885,7 +912,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                     return async function () {
                         const those = this;
 
-                        const { id, publicKey } = await createId(privateKey);
+                        const id = await createId(privateKey);
+                        const publicKey = (await crypto).schnorrq.generatePublicKey(privateKey);
 
                         let entity = entities.get(id);
                         if (entity === undefined) {
@@ -932,7 +960,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                         if (storedTransactionBytes !== undefined) {
                             // TODO: decrypt
-                            const storedTransaction = await transactionObject(storedTransactionBytes);
+                            const storedTransaction = await inspectTransaction(storedTransactionBytes);
                         
                             if (storedTransaction.sourceId !== id) {
                                 throw new Error('Invalid stored transaction!');
@@ -1041,12 +1069,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 },
                                 broadcastTransaction() {
                                     if (entity.outgoingTransaction && entity.outgoingTransaction.tick > system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET) {
-                                        const message = createMessage(BROADCAST_TRANSACTION.TYPE, entity.outgoingTransaction.bytes.length);
-                                        message.set(entity.outgoingTransaction.bytes, 0);
-
-                                        for (let i = 0; i <= TICK_TRANSACTIONS_PUBLICATION_OFFSET; i++) {
-                                            setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
-                                        }
+                                        _broadcastTransaction(entity.outgoingTransaction.bytes);
                                     }
                                 },
                             },
@@ -1059,7 +1082,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                     return quorumTicks.get(system.tick);
                 },
 
-                publicationTick() {
+                executionTick() {
                     if (system.tick > 0) {
                         return Promise.resolve(system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
                     }
@@ -1073,14 +1096,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                 broadcastTransaction(transaction) {
                     if (transaction.tick >= system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + 1) {
-                        const message = createMessage(BROADCAST_TRANSACTION.TYPE, transaction.bytes.byteLength);
-                        message.set(transaction.bytes, message.length - transaction.bytes.byteLength);
-
-                        transceiver.transmit(message);
-
-                        for (let i = 1; i < TICK_TRANSACTIONS_PUBLICATION_OFFSET + 1; i++) {
-                            setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
-                        }
+                        _broadcastTransaction(transaction.bytes);
                     }
                 },
             },
