@@ -62,13 +62,13 @@ client.connect([
 > Only one transaction can be executed per entity per tick.
 
 > [!CAUTION]
-> Sharing private keys among different client and entity instances, results in invalid data emitted in `transfer` and `entity.outgoingTransaction`, and may result to accidental cancelation of transactions.
-> Synchronize transaction issuance by additional code, if your use case reuires to support multiple instances simultaneously.
+> Sharing private keys among different client and entity instances may result in invalid data emitted in `transfer` and `entity.outgoingTransaction` events, as well as accidental cancelation of transactions.
+> Synchronize transaction issuance with additional code if your use case reuires to support multiple instances simultaneously.
 
-To issue transaction create an entity as the source. A suitable execution tick can be used by awaiting `entity.executionTick()` which is resolved once client is synced or after pending transaction is cleared.
-This prevents accidental cancelation of pending transaction and allows client to emit events which return execution status.
+To issue transaction create an entity as the source. A suitable execution tick can be used by awaiting `entity.executionTick()`, which is resolved once client is synced or after pending transaction is cleared.
+This prevents accidental cancelation of pending outgoing transaction and allows client to emit `transfer` events which return execution status.
 
-Pending transactions are stored in the filesystem, or browser's local storage. If proccess dies, or brower page is refreshed, processing will resume normally.
+Pending outgoing transactions are stored in the filesystem, or browser's local storage. If proccess dies, or broswer page is refreshed, processing will resume normally.
 
 Calling `entity.broadcastTransaction` broadcasts latest pending transaction to all connected peers.
 
