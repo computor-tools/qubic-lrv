@@ -161,7 +161,7 @@ export const inspectTransaction = async function (transaction) {
 };
 
 export const createTransaction = async function (sourcePrivateKey, {
-    sourcePublicKey,
+    sourceId,
     destinationId,
     amount,
     tick,
@@ -172,6 +172,17 @@ export const createTransaction = async function (sourcePrivateKey, {
 }) {
     if ((MAX_NUMBER_OF_CONTRACTS - 1) > Number.MAX_SAFE_INTEGER) {
         throw new TypeError('Assumed contract index to be safe integer.');
+    }
+
+    let sourcePublicKey;
+    if (typeof sourceId === 'string') {
+        sourcePublicKey = await idToBytes(sourceId);
+
+        if (isZero(sourcePublicKey)) {
+            throw new Error('Invalid source id, cannot be all 0s.');
+        }
+    } else {
+        throw new TypeError('Invalid source id!');
     }
 
     let destinationPublicKey;

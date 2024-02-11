@@ -898,9 +898,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             message.set(transactionBytes, 0);
 
             for (let i = 0; i <= TICK_TRANSACTIONS_PUBLICATION_OFFSET; i++) {
-                setTimeout(() => {
-                    console.log('broadcasting..')
-                    transceiver.transmit(message)}, i * TARGET_TICK_DURATION);
+                setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
             }
         }
 
@@ -948,7 +946,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         const those = this;
 
                         const id = await createId(privateKey);
-                        const publicKey = (await crypto).schnorrq.generatePublicKey(privateKey);
 
                         const transactionLock = createLock();
                         const executionTickLock = createLock();
@@ -959,7 +956,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         if (entity === undefined) {
                             entities.set(id, (entity = {
                                 id,
-                                publicKey,
+                                publicKey: (await crypto).schnorrq.generatePublicKey(privateKey),
                                 outgoingTransaction: undefined,
                                 emitter: those,
                             }));
@@ -1102,7 +1099,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         }
 
                                         entity.outgoingTransaction = await createTransaction(sourcePrivateKey, {
-                                            sourcePublicKey: publicKey,
+                                            sourceId: id,
                                             destinationId,
                                             amount,
                                             tick,
