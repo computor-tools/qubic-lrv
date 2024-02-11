@@ -47,6 +47,7 @@ await client.subscribe({ id: ARBITRATOR });
 client.addListener('epoch', (epoch) => console.log('Epoch:', epoch.epoch));
 client.addListener('tick', (tick) => console.log('Tick:', tick.tick));
 client.addListener('entity', (entity) => console.log('Entity:', entity.publicKey, entity.energy));
+client.addListener('error', (error) => console.log(error.message));
 
 client.connect([
     '?.?.?.?', // replace with full node addresses
@@ -60,9 +61,11 @@ client.connect([
 > [!IMPORTANT]  
 > Only one transaction can be executed per entity per tick.
 
-To issue transaction create an entity as the source.
-Once synced and ready to issue transaction, entities emit `execution_tick` event.
-Use this as hint to issue transaction and set `tick` to the one obtained from the event.
+> [!CAUTION]
+> Sharing private keys among different client and entity instances, results in invalid data emitted in `transfer` and `entity.outgoingTransaction`, and may result to accidental cancelation of transactions.
+> Synchronize transaction issuance by additional code, if your use case reuires to support multiple instances simultaneously.
+
+To issue transaction create an entity as the source. A suitable execution tick can be used by awaiting `entity.executionTick()` which is resolved once client is synced or after pending transaction is cleared.
 This prevents accidental cancelation of pending transaction and allows client to emit events which return execution status.
 
 Pending transactions are stored in the filesystem, or browser's local storage. If proccess dies, or brower page is refreshed, processing will resume normally.
@@ -70,30 +73,28 @@ Pending transactions are stored in the filesystem, or browser's local storage. I
 Calling `entity.broadcastTransaction` broadcasts latest pending transaction to all connected peers.
 
 ### Energy transfers
-
-> [!CAUTION]
-> Sharing private keys among different client and entity instances, results in invalid data emitted in `transfer` and `entity.outgoingTransaction`, and may result to accidental cancelation of transactions.
-
 To issue a transfer set `amount` field to a big integer, indicating the amount of transferred energy.
 
 ```JS
 const privateKey = await qubic.createPrivateKey(seed);
 const entity = await client.createEntity(privateKey); // creating an entity autogenerates subscription by entity.id
 
-entity.once('execution_tick', async function (tick) { // note .once() is important!
-    try {
-        const transaction = await entity.createTransaction(privateKey, {
-            destinationId: '', // Replace with destination id, (60 uppercase latin chars to include checksum)
-            amount: 0n,
-            tick,
-        });
-        console.log(transaction);
-
-        entity.broadcastTransaction();
-    } catch (error) {
-        console.log('Error:', error.message);
-    }
+entity.addListener('error', function (error) { // listen for errors
+    console.log(error);
 });
+
+try {
+    const transaction = await entity.createTransaction(privateKey, {
+        destinationId: '', // replace with destination id, (60 uppercase latin chars to include checksum)
+        amount: 0n,
+        tick: await entity.executionTick(),
+    });
+    console.log(transaction);
+
+    entity.broadcastTransaction();
+} catch (error) {
+    console.log(error.message);
+}
 ```
 
 > [!TIP]
@@ -105,26 +106,24 @@ client.addListener('transfer', function (transfer) {
 
     if (!tranfer.executed) {
         // create a new transaction if needed
-        entity.once('execution_tick', async function (tick) { // note .once() is important!
-            try {
-                const transaction = await entity.createTransaction(privateKey, {
-                    destinationId: transfer.destinationId,
-                    amount: transfer.amount,
-                    tick,
-                });
-                console.log('Latest transfer failed, retrying:', transaction);
-        
-                entity.broadcastTransaction();
-            } catch (error) {
-                console.log('Error:', error.message);
-            }
-        });
+        try {
+            const transaction = await entity.createTransaction(privateKey, {
+                destinationId: transfer.destinationId,
+                amount: transfer.amount,
+                tick: await entity.executionTick(),
+            });
+            console.log('Latest transfer failed, retrying:', transaction);
+
+            entity.broadcastTransaction();
+        } catch (error) {
+            console.log(error.message);
+        }
     }
 });
 ```
 
 > [!IMPORTANT]  
-> While transactions may be _included_ in the blockchain it is not necessery true that they were _executed_. This is why we rely on `RESPOND_ENTITY` data, and verify the merkle proof for the _spectrum_.
+> While transactions may be _included_ in the blockchain it is not necessarily true that they were _executed_. This is why we rely on `RESPOND_ENTITY` data, and verify the merkle proof for the _spectrum_.
 
 ### Air gap scenario
 

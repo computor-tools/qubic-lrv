@@ -60,17 +60,42 @@ export const isZero = function (array) {
 };
 
 export const equal = function (a, b) {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) {
-      return false;
+    if (a.length !== b.length) {
+        return false;
     }
-  }
 
-  return true;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) {
+        return false;
+        }
+    }
+
+    return true;
+};
+
+export const createLock = function () {
+    let locked = false;
+    const queue = [];
+
+    return {
+        acquire() {
+            return new Promise((resolve) => {
+                if (!locked) {
+                    locked = true;
+                    resolve();
+                } else {
+                    queue.push(resolve)
+                }
+            })
+        },
+        release() {
+            if (queue.length > 0) {
+                queue.shift()();
+            } else {
+                locked = false;
+            }
+        },
+    };
 };
 
 export const IS_BROWSER = (typeof window !== 'undefined') && (typeof window.document !== 'undefined');

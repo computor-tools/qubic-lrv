@@ -59,36 +59,8 @@ const test = async function ({ seed, pingPongAmount }) {
     }
 
     const client = qubic.createClient();
+
     await client.subscribe({ id: qubic.ARBITRATOR }); // subscribe to arbitrary id
-
-    if (seed.length) {
-        const privateKeys = [
-            await qubic.createPrivateKey(seed, 0),
-            await qubic.createPrivateKey(seed, 1),
-        ];
-        const entity = await client.createEntity(privateKeys[0]); // creating an entity, autogenerates subscription by entity.id
-
-        const destinationId = (await client.createEntity(privateKeys[1])).id; // own destination
-
-        entity.on('execution_tick', async function (tick) { // request suitable execution tick after syncing
-            try {
-                const transaction = await entity.createTransaction(
-                    privateKeys[0],
-                    {
-                        destinationId,
-                        amount: pingPongAmount,
-                        tick,
-                    }
-                ); // calling createTransaction again may fail, need to wait for another execution tick, because otherwise previous tx could be overwritten.
-            
-                console.log('Tx:', transaction.digest, transaction.tick);
-            } catch (error) {
-                console.log('Error:', error.message);
-            }
-
-            entity.broadcastTransaction(); // broadcasts the latest non-processed transaction
-        });
-    }
 
     client.addListener('epoch', (epoch) => console.log('Epoch:', epoch.epoch));
     client.addListener('tick', (tick) => console.log('\nTick  :', tick.tick, tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
@@ -102,7 +74,35 @@ const test = async function ({ seed, pingPongAmount }) {
     client.addListener('transfer', (transfer) => console.log('Transfer:', transfer));
     client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
 
+    client.addListener('error', (error) => console.log(error.message));
+
     client.connect((process.env.PUBLIC_PEERS).split(',').map(s => s.trim())); // start the loop by listening to networked messages
+
+    if (seed.length) {
+        const privateKeys = [
+            await qubic.createPrivateKey(seed, 0),
+            await qubic.createPrivateKey(seed, 1),
+        ];
+        const entity = await client.createEntity(privateKeys[0]); // creating an entity, autogenerates subscription by entity.id
+
+        const destinationId = (await client.createEntity(privateKeys[1])).id; // own destination
+
+        try {
+            const transaction = await entity.createTransaction(
+                privateKeys[0],
+                {
+                    destinationId,
+                    amount: pingPongAmount,
+                    tick: await entity.executionTick(), // request suitable execution tick
+                }
+            );
+            entity.broadcastTransaction(); // broadcasts the latest non-processed transaction
+
+            console.log('Tx:', transaction.digest, transaction.tick);
+        } catch (error) {
+            console.log('Error:', error.message);
+        }
+    }
 };
 
 test({

@@ -91,7 +91,7 @@ import {
     shiftedHexToBytes,
     bytesToShiftedHex,
 } from './converter.js';
-import { isZero, equal, IS_BROWSER } from './utils.js';
+import { isZero, equal, createLock, IS_BROWSER } from './utils.js';
 import { createPrivateKey, createId, SEED_LENGTH } from './id.js';
 import { TRANSACTION, createTransaction, inspectTransaction } from './transaction.js';
 
@@ -113,6 +113,20 @@ const importPath = Promise.resolve(!IS_BROWSER && import('node:path'));
 const importFs = Promise.resolve(!IS_BROWSER && import('node:fs'));
 
 const STORED_ENTITIES_DIR = 'stored_entities';
+
+export const atomic = function (init) {
+    let current = init;
+    const queue = [];
+
+    return {
+        interlockComparedExchange(next, compare) {
+            if (compare(current, next)) {
+                return (current = next);
+            }
+            return false;
+        },
+    }
+};
 
 const inferEpoch = function() {
     const now = new Date();
@@ -161,6 +175,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
         const entities = new Map();
         const entitiesByTick = new Map();
 
+        const tickLock = createLock();
+
         const system = {
             epoch: 0,
             tick: 0,
@@ -174,6 +190,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
         let quorumTickRequestingInterval;
         let currentTickInfoRequestingInterval;
         let averageQuorumTickProcessingDuration = TARGET_TICK_DURATION;
+
+        let numberOfSkippedTicks;
 
         let numberOfUpdatedEntities = 0;
         let numberOfClearedTransactions = 0;
@@ -374,11 +392,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         const stats = Object.freeze({
                             tick: system.tick,
                             duration: now - (latestQuorumTickTimestamp || startupTime),
-                            numberOfSkippedTicks: (quorumTick.tick - 1) - system.tick,
+                            numberOfSkippedTicks: numberOfSkippedTicks === undefined ? system.initialTick - 1 : numberOfSkippedTicks,
                             numberOfUpdatedEntities,
                             numberOfSkippedEntities: entities.size - numberOfUpdatedEntities,
                             numberOfClearedTransactions,
                         });
+
+                        numberOfSkippedTicks = (quorumTick.tick - 1) - system.tick;
 
                         that.emit('tick_stats', stats);
                     }
@@ -422,6 +442,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     let outgoingTransaction;
 
                                     if (entity.outgoingTransaction !== undefined && entity.outgoingTransaction.tick <= quorumTick.tick) {
+                                        const outgoingTransactionCopy = entity.outgoingTransaction;
+
                                         outgoingTransaction = Object.freeze({
                                             sourceId: entity.outgoingTransaction.sourceId,
                                             destinationId: entity.outgoingTransaction.destinationId,
@@ -446,21 +468,30 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         if (IS_BROWSER) {
                                             localStorage.removeItem(entity.id);
                                         } else {
-                                            const path = await importPath;
-                                            const fs = await importFs;
-        
-                                            const file = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id);
-        
-                                            if (fs.existsSync(file)) {
-                                                fs.unlinkSync(file);
+                                            try {
+                                                const path = await importPath;
+                                                const fs = await importFs;
+
+                                                const file = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id);
+
+                                                if (fs.existsSync(file)) {
+                                                    fs.unlinkSync(file);
+                                                }
+                                            } catch (error) {
+                                                entity.transaction = outgoingTransactionCopy;
+                                                outgoingTransaction = undefined;
+
+                                                that.emit('error', error);
                                             }
                                         }
 
-                                        if (outgoingTransaction.destinationId !== entity.id && (outgoingTransaction.amount > 0n || outgoingTransaction.contractIPO_BidPrice > 0n)) {                                            
-                                            that.emit('transfer', outgoingTransaction);
-                                        }
+                                        if (outgoingTransaction !== undefined) {
+                                            if (outgoingTransaction.destinationId !== entity.id && (outgoingTransaction.amount > 0n || outgoingTransaction.contractIPO_BidPrice > 0n)) {
+                                                that.emit('transfer', outgoingTransaction);
+                                            }
 
-                                        numberOfClearedTransactions++;
+                                            numberOfClearedTransactions++;
+                                        }
                                     }
         
                                     entity.incomingAmount = respondedEntity.incomingAmount;
@@ -556,6 +587,9 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             K12(message.subarray(BROADCAST_COMPUTORS.EPOCH_OFFSET, BROADCAST_COMPUTORS.SIGNATURE_OFFSET), receivedComputors.digest, crypto.DIGEST_LENGTH);
 
                             if (schnorrq.verify(await ARBITRATOR_BYTES, receivedComputors.digest, receivedComputors.signature)) {
+
+                                await tickLock.acquire();
+
                                 if (system.epoch === 0) {
                                     const checkpointBytes = new Uint8Array(BROADCAST_COMPUTORS.EPOCH_LENGTH + BROADCAST_COMPUTORS.PUBLIC_KEYS_LENGTH);
                                     const checkpointBytesView = new DataView(checkpointBytes.buffer, checkpointBytes.byteOffset);
@@ -590,6 +624,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                         for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
                                             if (!epochs.has(i) || (uniquePeersByEpoch.get(i).size < (Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1))) {
+                                                tickLock.release();
                                                 return;
                                             }
                                         }
@@ -599,7 +634,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
                                                 if (epochs.get(i + 1).computorPublicKeyStrings.indexOf(epochs.get(i).computorPublicKeyStrings[j]) === -1) {
                                                     if (++numberOfReplacedComputors > NUMBER_OF_COMPUTORS - QUORUM) {
-                                                        throw new Error(`Illegal number of replaced computors! (epoch ${i + 1})`);
+                                                        system.epoch = 0x10000;
+                                                        that.emit('error', new Error(`Illegal number of replaced computors! (epoch ${i + 1}). Replace arbitrator.`));
                                                     }
                                                 }
                                             }
@@ -625,7 +661,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         }
                                     } else {
                                         system.epoch = 0x10000;
-                                        that.emit('error', 'Select another arbitrator.');
+                                        that.emit('error', new Error('Replace arbitrator.'));
                                     }
                                 } else {
                                     for (let i = 0, offset = BROADCAST_COMPUTORS.PUBLIC_KEYS_OFFSET; i < NUMBER_OF_COMPUTORS; i++) {
@@ -641,6 +677,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             } else {
                                 peer.ignore();
                             }
+
+                            tickLock.release();
                         } else {
                             peer.ignore();
                         }
@@ -687,6 +725,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             signature: message.subarray(BROADCAST_TICK.SIGNATURE_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET + crypto.SIGNATURE_LENGTH),
                         };
 
+                        await tickLock.acquire();
+
                         if (receivedTick.epoch === inferEpoch() && receivedTick.epoch === system.epoch && receivedTick.tick > system.tick) {
                             if (!epochs.get(epoch).faultyComputorFlags[computorIndex]) {
                                 if (
@@ -722,7 +762,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     receivedTick.millisecond <= 999
                                 ) {
                                     const { K12, schnorrq } = await crypto;
-                            
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
                                     K12(message.subarray(BROADCAST_TICK.COMPUTOR_INDEX_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET), receivedTick.digest, crypto.DIGEST_LENGTH);
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
@@ -739,7 +778,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                             if (ticks.get(receivedTick.tick).filter(t => t !== undefined).length > 0 && (ticks.get(receivedTick.tick - 1)?.filter(t => t !== undefined) || []).length >= QUORUM) {
                                                 if (entitiesByTick.has(receivedTick.tick - 1) || entities.size === 0) {
-                                                    verify(receivedTick.tick - 1, peer);
+                                                    await verify(receivedTick.tick - 1, peer);
                                                 }
                                             }
                                         } else if (
@@ -761,6 +800,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 }
                             }
                         }
+
+                        tickLock.release();
                     } else {
                         peer.ignore();
                     }
@@ -785,7 +826,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 requestQuorumTick(peer, tickHint + 1);
 
                                 clearInterval(quorumTickRequestingInterval);
-                                quorumTickRequestingInterval = setInterval(() => {
+                                quorumTickRequestingInterval = setInterval(async () => {
+                                    await tickLock.acquire();
                                     let tick = tickHint > system.tick ? tickHint : system.tick + 1;
                                     if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
                                         requestQuorumTick(peer, tick);
@@ -803,6 +845,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             requestQuorumTick(peer, tick + 1);
                                         }
                                     }
+                                    tickLock.release();
                                 }, TARGET_TICK_DURATION);
                             }
                         } else {
@@ -834,6 +877,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                         (await crypto).K12(message.slice(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET + BROADCAST_TICK.TICK_LENGTH), respondedEntity.digest, crypto.DIGEST_LENGTH);
 
+                        await tickLock.acquire();
+
                         if (entities.has(respondedEntity.id)) {
                             if (respondedEntity.spectrumIndex > -1) {
                                 let tickEntities = entitiesByTick.get(respondedEntity.tick);
@@ -846,11 +891,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 }
                                 tickEntities.get(respondedEntity.id).push(respondedEntity);
                                 if (ticks.has(respondedEntity.tick) && ticks.get(respondedEntity.tick).filter(t => t !== undefined).length >= QUORUM) {
-                                   verify(respondedEntity.tick, peer);
+                                    await verify(respondedEntity.tick, peer);
                                 }
                                 
                             }
                         }
+
+                        tickLock.release();
                     } else {
                         peer.ignore();
                     }
@@ -865,7 +912,9 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             message.set(transactionBytes, 0);
 
             for (let i = 0; i <= TICK_TRANSACTIONS_PUBLICATION_OFFSET; i++) {
-                setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
+                setTimeout(() => {
+                    console.log('broadcasting..')
+                    transceiver.transmit(message)}, i * TARGET_TICK_DURATION);
             }
         }
 
@@ -915,6 +964,11 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         const id = await createId(privateKey);
                         const publicKey = (await crypto).schnorrq.generatePublicKey(privateKey);
 
+                        const transactionLock = createLock();
+                        const executionTickLock = createLock();
+
+                        await tickLock.acquire();
+
                         let entity = entities.get(id);
                         if (entity === undefined) {
                             entities.set(id, (entity = {
@@ -925,6 +979,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             }));
                         } else {
                             if (entity.emitter !== undefined) {
+                                tickLock.release();
                                 throw new Error('Cannot duplicate entity.');
                             }
 
@@ -944,36 +999,60 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             const file = path.join(dir, id);
                             const temp = file + '-temp';
 
-                            if (!fs.existsSync(dir)) {
-                                fs.mkdirSync(dir);
-                            } else {
-                                if (fs.existsSync(temp)) {
-                                    fs.renameSync(temp, file);
+                            try  {
+                                if (!fs.existsSync(dir)) {
+                                    fs.mkdirSync(dir);
+                                } else {
+                                    if (fs.existsSync(temp)) {
+                                        fs.unlinkSync(temp);
+                                    } else if (fs.existsSync(file)) {
+                                        const buffer = fs.readFileSync(file);
+                                        storedTransactionBytes = Uint8Array.from(buffer);
+                                    }
                                 }
-                            
-                                if (fs.existsSync(file)) {
-                                    const buffer = fs.readFileSync(file);
-                                    storedTransactionBytes = Uint8Array.from(buffer);
-                                }
+                            } catch (error) {
+                                tickLock.release();
+                                throw error;
                             }
                         }
 
                         if (storedTransactionBytes !== undefined) {
                             // TODO: decrypt
-                            const storedTransaction = await inspectTransaction(storedTransactionBytes);
-                        
+                            let storedTransaction;
+
+                            try {
+                                storedTransaction = await inspectTransaction(storedTransactionBytes);
+                            } catch (error) {
+                                tickLock.release();
+                                throw error;
+                            }
+
                             if (storedTransaction.sourceId !== id) {
+                                tickLock.release();
                                 throw new Error('Invalid stored transaction!');
                             }
 
                             entity.outgoingTransaction = storedTransaction;
                         }
 
+                        tickLock.release();
+
                         return Object.assign(
                             those,
                             {
                                 get id() {
                                     return id;
+                                },
+
+                                async executionTick() {
+                                    await executionTickLock.acquire();
+
+                                    return new Promise(function (resolve) {
+                                        those.once('execution_tick', function (tick) {
+                                            executionTickLock.release();
+                                            resolve(tick);
+                                        });
+                                    });
                                 },
 
                                 async createTransaction(sourcePrivateKey, {
@@ -985,69 +1064,77 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     contractIPO_BidPrice,
                                     contractIPO_BidQuantity,
                                 }) {
-                                    if (system.tick === 0) {
-                                        throw new Error('Failed to issue transaction, system not synchronized yet...');
-                                    }
+                                    await transactionLock.acquire();
+                                    await tickLock.acquire();
 
-                                    if (entity.energy === undefined) {
-                                        throw new Error('Failed to issue transaction, entity not synchronized yet...');
-                                    }
-
-                                    if (entity.outgoingTransaction !== undefined) {
-                                        throw new Error(`There is pending outgoing transaction. (tick: ${entity.outgoingTransaction.tick})`);
-                                    }
-
-                                    if (typeof amount === 'bigint' && amount >= 0n && amount <= MAX_AMOUNT) {
-                                        if (amount > entity.energy) {
-                                            throw new Error('Amount exceeds possesed energy!');
+                                    try {
+                                        if (system.tick === 0) {
+                                            throw new Error('Failed to issue transaction, system not synchronized yet...');
                                         }
-                                    } else {
-                                        throw new TypeError('Invalid amount!');
-                                    }
 
-                                    if (contractIPO_BidPrice !== undefined || contractIPO_BidQuantity !== undefined) {
-                                        if (
-                                            typeof contractIPO_BidPrice === 'bigint' && contractIPO_BidPrice > 0n && contractIPO_BidPrice <= TRANSACTION.MAX_CONTRACT_IPO_BID_PRICE &&
-                                            Number.isInteger(contractIPO_BidQuantity) && contractIPO_BidQuantity > 0 && contractIPO_BidQuantity <= TRANSACTION.MAX_CONTRACT_IPO_BID_QUANTITY
-                                        ) {
-                                            if (contractIPO_BidPrice * BigInt(contractIPO_BidQuantity) > entity.energy - amount) {
-                                                throw new Error('Contract IPO bid exceeds possessed energy!');
+                                        if (entity.energy === undefined) {
+                                            throw new Error('Failed to issue transaction, entity not synchronized yet...');
+                                        }
+
+                                        if (entity.outgoingTransaction !== undefined) {
+                                            throw new Error(`There is pending outgoing transaction. (tick: ${entity.outgoingTransaction.tick})`);
+                                        }
+
+                                        if (typeof amount === 'bigint' && amount >= 0n && amount <= MAX_AMOUNT) {
+                                            if (amount > entity.energy) {
+                                                throw new Error('Amount exceeds possesed energy!');
                                             }
                                         } else {
-                                            throw new TypeError('Invalid contract IPO bid.');
+                                            throw new TypeError('Invalid amount!');
                                         }
-                                    }
 
-                                    const saneTick = system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1;
+                                        if (contractIPO_BidPrice !== undefined || contractIPO_BidQuantity !== undefined) {
+                                            if (
+                                                typeof contractIPO_BidPrice === 'bigint' && contractIPO_BidPrice > 0n && contractIPO_BidPrice <= TRANSACTION.MAX_CONTRACT_IPO_BID_PRICE &&
+                                                Number.isInteger(contractIPO_BidQuantity) && contractIPO_BidQuantity > 0 && contractIPO_BidQuantity <= TRANSACTION.MAX_CONTRACT_IPO_BID_QUANTITY
+                                            ) {
+                                                if (contractIPO_BidPrice * BigInt(contractIPO_BidQuantity) > entity.energy - amount) {
+                                                    throw new Error('Contract IPO bid exceeds possessed energy!');
+                                                }
+                                            } else {
+                                                throw new TypeError('Invalid contract IPO bid.');
+                                            }
+                                        }
 
-                                    if (tick !== undefined) {
-                                        if (!Number.isInteger(tick)) {
-                                            throw new TypeError('Invalid transaction tick!');
+                                        if (tick !== undefined) {
+                                            if (!Number.isInteger(tick)) {
+                                                throw new TypeError('Invalid transaction tick!');
+                                            }
+                                            if (tick < system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1) {
+                                                throw new RangeError('Transaction tick not far enough in the future...');
+                                            }
+                                            if (tick - system.tick > Math.floor((60 * 1000) / TARGET_TICK_DURATION)) { // avoid timelocks as a result of setting tick too far in the future.
+                                                throw new RangeError('Transaction tick too far in the future!');
+                                            }
+                                        } else {
+                                            tick = await those.executionTick();
                                         }
-                                        if (tick < saneTick) {
-                                            throw new RangeError('Transaction tick not far enough in the future...');
-                                        }
-                                        if (tick - system.tick > Math.floor((60 * 1000) / TARGET_TICK_DURATION)) { // avoid timelocks as a result of setting tick too far in the future.
-                                            throw new RangeError('Transaction tick too far in the future!');
-                                        }
-                                    } else {
-                                        tick = saneTick;
+
+                                        entity.outgoingTransaction = await createTransaction(sourcePrivateKey, {
+                                            sourcePublicKey: publicKey,
+                                            destinationId,
+                                            amount,
+                                            tick,
+                                            inputType,
+                                            input,
+                                            contractIPO_BidPrice,
+                                            contractIPO_BidQuantity,
+                                        });
+                                    } catch (error) {
+                                        tickLock.release();
+                                        transactionLock.release();
+
+                                        throw error;
                                     }
-                
-                                    const transaction = await createTransaction(sourcePrivateKey, {
-                                        sourcePublicKey: publicKey,
-                                        destinationId,
-                                        amount,
-                                        tick,
-                                        inputType,
-                                        input,
-                                        contractIPO_BidPrice,
-                                        contractIPO_BidQuantity,
-                                    });
 
                                     if (IS_BROWSER) {
                                         // TODO: encrypt
-                                        localStorage.setItem(id, bytesToShiftedHex(transaction.bytes));
+                                        localStorage.setItem(id, bytesToShiftedHex(entity.outgoingTransaction.bytes));
                                     } else {
                                         const path = await importPath;
                                         const fs = await importFs;
@@ -1056,19 +1143,32 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         const file = path.join(dir, id);
                                         const temp = file + '-temp';
 
-                                        if (!fs.existsSync(dir)) {
-                                            fs.mkdirSync(dir);
-                                        }
+                                        try {
+                                            if (!fs.existsSync(dir)) {
+                                                fs.mkdirSync(dir);
+                                            }
 
-                                        // TODO: encrypt
-                                        fs.writeFileSync(temp, Uint8Array.from(transaction.bytes));
-                                        fs.renameSync(temp, file);
+                                            // TODO: encrypt
+                                            fs.writeFileSync(temp, Uint8Array.from(entity.outgoingTransaction.bytes));
+                                            fs.renameSync(temp, file);
+                                        } catch (error) {
+                                            entity.outgoingTransaction = undefined;
+
+                                            tickLock.release();
+                                            transactionLock.release();
+
+                                            throw error;
+                                        }
                                     }
-                
-                                    return (entity.outgoingTransaction = transaction);
+
+                                    tickLock.release();
+                                    transactionLock.release();
+
+                                    return entity.outgoingTransaction;
                                 },
+
                                 broadcastTransaction() {
-                                    if (entity.outgoingTransaction && entity.outgoingTransaction.tick > system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET) {
+                                    if (entity.outgoingTransaction !== undefined && entity.outgoingTransaction.tick > system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET) {
                                         _broadcastTransaction(entity.outgoingTransaction.bytes);
                                     }
                                 },
