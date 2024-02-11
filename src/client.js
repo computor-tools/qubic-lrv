@@ -114,20 +114,6 @@ const importFs = Promise.resolve(!IS_BROWSER && import('node:fs'));
 
 const STORED_ENTITIES_DIR = 'stored_entities';
 
-export const atomic = function (init) {
-    let current = init;
-    const queue = [];
-
-    return {
-        interlockComparedExchange(next, compare) {
-            if (compare(current, next)) {
-                return (current = next);
-            }
-            return false;
-        },
-    }
-};
-
 const inferEpoch = function() {
     const now = new Date();
     let year =  now.getUTCFullYear() - 2000;
