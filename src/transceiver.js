@@ -757,7 +757,7 @@ export const createTransceiver = function (receiveCallback) {
         }
 
         if (!initialHandshakesDone) {
-            if (message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === EXCHANGE_PUBLIC_PEERS.TYPE) {
+            if (type === EXCHANGE_PUBLIC_PEERS.TYPE) {
                 if (initialHandshakingPeers.size === MIN_NUMBER_OF_PUBLIC_PEERS) {
                     if (typeof receiveCallback === 'function') {
                         for (let i = 0; i < initiallyExchangedPeers.length; i++) {
