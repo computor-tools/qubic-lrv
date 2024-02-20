@@ -124,28 +124,6 @@ const inferEpoch = function() {
     return Math.floor(days / 7) + ((Math.floor(days % 7) === 0 && now.getUTCHours() < 12) ? 0 : 1);
 };
 
-const merkleRoot = async function (spectrumIndex, digest, siblings) {
-    const pair = new Uint8Array(crypto.DIGEST_LENGTH * 2);
-    const root = new Uint8Array(crypto.DIGEST_LENGTH);
-
-    root.set(digest.slice());
-
-    for (let i = 0; i < SPECTRUM_DEPTH; i++) {
-        if ((spectrumIndex & 1) == 0) {
-            pair.set(root);
-            pair.set(siblings.slice(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH), crypto.DIGEST_LENGTH);
-        } else {
-            pair.set(siblings.slice(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH));
-            pair.set(root, crypto.DIGEST_LENGTH);
-        }
-        await crypto.K12(pair, root, crypto.DIGEST_LENGTH);
-
-        spectrumIndex >>= 1;
-    }
-
-    return root;
-}
-
 export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH) {
 
     return function () {
@@ -411,7 +389,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                 if (entitiesByTick.has(quorumTick.tick)) {
                     for (const tickEntities of entitiesByTick.get(quorumTick.tick).values()) {
                         for (const respondedEntity of tickEntities) {
-                            if (isZero(respondedEntity.spectrumDigest)) {
+                            if (isZero(respondedEntity.spectrumDigest) && !isZero(respondedEntity.siblings)) {
                                 await crypto.merkleRoot(SPECTRUM_DEPTH, respondedEntity.spectrumIndex, respondedEntity.data, respondedEntity.siblings, respondedEntity.spectrumDigest);
                             }
 
