@@ -8,10 +8,12 @@ Only `RESPOND_ENTITY` is supported now. Support for assets and contracts will be
 ## Rationale
 
 There are 676 computors, elected by the miners who assign useful proofs of work. Computors issue special tick transactions to reach final agreement, which is detected as soon as 451 votes are found to be aligned (excluding own vote).
+
 Lite client verification routine collects and compares 451 votes signed by discrete computor public keys. This logic will be revisited after core is changed to rely on arb signature for faulty computors.
-At least 451 prev tick votes and 451 current tick votes are compared against each othor, if aligned we detect _finality_ of prev tick.
+At least 451 prev tick votes and 451 current tick votes are compared against each other, if aligned we detect _finality_ of prev tick.
+
 Client may receive arbitrary data from `RESOND_ENTITY` message, for this reason we use such messages to calculate merkle root. The root is compared to the corresponding prev spectrum digest aligning with 451 next tick votes.
-If matching, entity data are accepted, and we deduce execution status of issued transactions. Ticks can be skipped because issuance awaits status of previous transaction.
+If matching, entity data are accepted and we deduce execution status of issued transactions. Ticks can be skipped because issuance awaits status of previous transaction.
 
 ### Networking
 
@@ -22,12 +24,15 @@ Using pub/sub vs tcp and websocket polling to fetch entity data is also being ex
 ## License
 Come-from-Beyond's [**Anti-Military License**](LICENSE).
 
+For licenses of microsoft/FourQlib and XKCP/K12 dependencies refer to [qubic-crypto](https://github.com/computor-tools/qubic-crypto/blob/main/LICENSE) repo.
+
 ## Usage
 ```bash
 git clone https://github.com/computor-tools/qubic-lrv && cd qubic-lrv
 ```
 ### Install dependencies
-Postinstall fetches dependencies (FourQlib, K12 & emsdk) from Github, executes GNU Make and emsdk scripts. Requires GNU Make to be already installed, [check CI](https://github.com/computor-tools/qubic-crypto/actions) for more info.
+Postinstall fetches dependencies from Github ([microsoft/FourQlib](https://github.com/Microsoft/FourQlib), [XKCP/K12](https://github.com/XKCP/K12) & [emscripten-core/emsdk](https://github.com/emscripten-core/emsdk)), executes GNU Make and emsdk executables.
+Requires GNU Make to be already installed, [check CI](https://github.com/computor-tools/qubic-crypto/actions) for more info.
 
 ```
 bun install --verbose
@@ -83,7 +88,7 @@ Pending outgoing transactions are stored in the filesystem, or browser's local s
 Calling `entity.broadcastTransaction` broadcasts latest pending transaction to all connected peers.
 
 ### Energy transfers
-To issue a transfer set `amount` field to a big integer, indicating the amount of transferred energy.
+To issue a transfer set `amount` field to a big integer, indicating the amount of transferred energy in qus.
 
 ```JS
 const privateKey = await qubic.createPrivateKey(seed);
