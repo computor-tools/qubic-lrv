@@ -229,149 +229,138 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             peer.transmit(message);
         };
 
-        const verify = async function (tick, peer) {
+        const detectQuorumTick = async function (tick, nextQuorumTick) {
             let quorumTick = quorumTicks.get(tick);
 
-            if (quorumTick === undefined) {
+            if (!quorumTick) {
                 const storedTicks = ticks.get(tick) || [];
-                const nextStoredTicks = ticks.get(tick + 1) || [];
 
-                if (storedTicks.filter(tick => tick !== undefined).length >= QUORUM && nextStoredTicks.findIndex(tick => tick !== undefined) > -1) {
+                if (storedTicks.filter(storedTick => storedTick !== undefined).length >= QUORUM) {
                     const { K12 } = await crypto;
                     const saltedDigest = new Uint8Array(crypto.DIGEST_LENGTH);
                     const saltedData = new Uint8Array(crypto.PUBLIC_KEY_LENGTH + crypto.DIGEST_LENGTH);
 
-                    for (let k = 0; k < NUMBER_OF_COMPUTORS; k++) {
-                        if (nextStoredTicks[k] !== undefined) {
-                            for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
-                                if (storedTicks[i] !== undefined) {
-                                    saltedData.set(storedTicks[i].computorPublicKey);
-                                    saltedData.set(nextStoredTicks[k].prevResourceTestingDigest, crypto.PUBLIC_KEY_LENGTH);
-                                    K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
+                    const isPrevTick = function (storedTick) { // verify stored tick matches completed prev tick
+                        if (nextQuorumTick) {
+                            saltedData.set(storedTick.computorPublicKey);
+                            saltedData.set(nextQuorumTick.prevResourceTestingDigest, crypto.PUBLIC_KEY_LENGTH);
+                            K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
 
-                                    if (equal(saltedDigest.subarray(0, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), storedTicks[i].saltedResourceTestingDigest)) {
-                                        saltedData.set(nextStoredTicks[k].prevSpectrumDigest, crypto.PUBLIC_KEY_LENGTH);
+                            if (equal(saltedDigest, storedTick.saltedResourceTestingDigest)) {
+                                saltedData.set(nextQuorumTick.prevSpectrumDigest, crypto.PUBLIC_KEY_LENGTH);
+                                K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+
+                                if (equal(saltedDigest, storedTick.saltedSpectrumDigest)) {
+                                    saltedData.set(nextQuorumTick.prevUniverseDigest, crypto.PUBLIC_KEY_LENGTH);
+                                    K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+
+                                    if (equal(saltedDigest, storedTick.saltedUniverseDigest)) {
+                                        saltedData.set(nextQuorumTick.prevComputerDigest, crypto.PUBLIC_KEY_LENGTH);
                                         K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
 
-                                        if (equal(saltedDigest, storedTicks[i].saltedSpectrumDigest)) {
-                                            saltedData.set(nextStoredTicks[k].prevUniverseDigest, crypto.PUBLIC_KEY_LENGTH);
-                                            K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                        if (equal(saltedDigest, storedTick.saltedComputerDigest)) {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
-                                            if (equal(saltedDigest, storedTicks[i].saltedUniverseDigest)) {
-                                                saltedData.set(nextStoredTicks[k].prevComputerDigest, crypto.PUBLIC_KEY_LENGTH);
-                                                K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
-    
-                                                if (equal(saltedDigest, storedTicks[i].saltedComputerDigest)) {
-                                                    const quorumComputorIndices = [storedTicks[i].computorIndex];
+                        return false;
+                    };
 
-                                                    for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
-                                                        if (j !== i && storedTicks[j] !== undefined) {
+                    for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
+                        if (storedTicks[i] !== undefined) {
+                            if (!nextQuorumTick || isPrevTick(storedTicks[i])) {
+                                const quorumComputorIndices = [storedTicks[i].computorIndex];
 
-                                                            if (
-                                                                equal(storedTicks[i].time, storedTicks[j].time) &&
-                                                                equal(storedTicks[i].prevSpectrumDigest, storedTicks[j].prevSpectrumDigest) &&
-                                                                equal(storedTicks[i].prevUniverseDigest, storedTicks[j].prevUniverseDigest) &&
-                                                                equal(storedTicks[i].prevComputerDigest, storedTicks[j].prevComputerDigest) &&
-                                                                equal(storedTicks[i].transactionDigest, storedTicks[j].transactionDigest)
-                                                            ) {
-                                                                saltedData.set(storedTicks[j].computorPublicKey);
-                                                                saltedData.set(nextStoredTicks[k].prevResourceTestingDigest, crypto.PUBLIC_KEY_LENGTH);
-                                                                K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
-                                
-                                                                if (equal(saltedDigest.subarray(0, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), storedTicks[j].saltedResourceTestingDigest)) {
-                                                                    saltedData.set(nextStoredTicks[k].prevSpectrumDigest, crypto.PUBLIC_KEY_LENGTH);
-                                                                    K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
+                                    if (j !== i && storedTicks[j] !== undefined) {
 
-                                                                    if (equal(saltedDigest, storedTicks[j].saltedSpectrumDigest)) {
-                                                                        saltedData.set(nextStoredTicks[k].prevUniverseDigest, crypto.PUBLIC_KEY_LENGTH);
-                                                                        K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                        if (
+                                            equal(storedTicks[i].time, storedTicks[j].time) &&
+                                            equal(storedTicks[i].prevSpectrumDigest, storedTicks[j].prevSpectrumDigest) &&
+                                            equal(storedTicks[i].prevUniverseDigest, storedTicks[j].prevUniverseDigest) &&
+                                            equal(storedTicks[i].prevComputerDigest, storedTicks[j].prevComputerDigest) &&
+                                            equal(storedTicks[i].transactionDigest, storedTicks[j].transactionDigest)
+                                        ) {
+                                            if (!nextQuorumTick || isPrevTick(storedTicks[j])) {
+                                                quorumComputorIndices.push(storedTicks[j].computorIndex);
 
-                                                                        if (equal(saltedDigest, storedTicks[j].saltedUniverseDigest)) {
-                                                                            saltedData.set(nextStoredTicks[k].prevComputerDigest, crypto.PUBLIC_KEY_LENGTH);
-                                                                            K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                                if (quorumComputorIndices.length === QUORUM) {
+                                                    quorumTick = {
+                                                        computorIndices: Object.freeze(quorumComputorIndices),
+                                                        tick: storedTicks[j].tick,
+                                                        epoch: storedTicks[j].epoch,
 
-                                                                            if (equal(saltedDigest, storedTicks[j].saltedComputerDigest)) {
-                                                                                quorumComputorIndices.push(storedTicks[j].computorIndex);
+                                                        timestamp: storedTicks[j].month.toString().padStart(2, '0') + '-' + storedTicks[j].day.toString().padStart(2, '0') + '-' + storedTicks[j].year.toString() +
+                                                            'T' + storedTicks[j].hour.toString().padStart(2, '0') + ':' + storedTicks[j].minute.toString().padStart(2, '0') + ':' + storedTicks[j].second.toString().padStart(2, '0') + '.' + storedTicks[j].millisecond.toString().padStart(3, '0'),
 
-                                                                                if (quorumComputorIndices.length === QUORUM) {
-                                                                                    quorumTick = Object.freeze({
-                                                                                        computorIndices: Object.freeze(quorumComputorIndices),
-                                                                                        tick: storedTicks[j].tick,
-                                                                                        epoch: storedTicks[j].epoch,
+                                                        prevResourceTestingDigest: bigUint64ToString(bytesToBigUint64(storedTicks[j].prevResourceTestingDigest)),
 
-                                                                                        timestamp: storedTicks[j].month.toString().padStart(2, '0') + '-' + storedTicks[j].day.toString().padStart(2, '0') + '-' + storedTicks[j].year.toString() +
-                                                                                            'T' + storedTicks[j].hour.toString().padStart(2, '0') + ':' + storedTicks[j].minute.toString().padStart(2, '0') + ':' + storedTicks[j].second.toString().padStart(2, '0') + '.' + storedTicks[j].millisecond.toString().padStart(3, '0'),
+                                                        prevSpectrumDigest: digestBytesToString(storedTicks[j].prevSpectrumDigest),
+                                                        prevUniverseDigest: digestBytesToString(storedTicks[j].prevUniverseDigest),
+                                                        prevComputerDigest: digestBytesToString(storedTicks[j].prevComputerDigest),
 
-                                                                                        prevResourceTestingDigest: bigUint64ToString(bytesToBigUint64(storedTicks[j].prevResourceTestingDigest)),
-                                                                                        resourceTestingDigest:  bigUint64ToString(bytesToBigUint64(nextStoredTicks[k].prevResourceTestingDigest)),
+                                                        transactionDigest: digestBytesToString(storedTicks[j].transactionDigest),
+                                                    };
 
-                                                                                        prevSpectrumDigest: digestBytesToString(storedTicks[j].prevSpectrumDigest),
-                                                                                        prevUniverseDigest: digestBytesToString(storedTicks[j].prevUniverseDigest),
-                                                                                        prevComputerDigest: digestBytesToString(storedTicks[j].prevComputerDigest),
-                                                                                        spectrumDigest: digestBytesToString(nextStoredTicks[k].prevSpectrumDigest),
-                                                                                        universeDigest: digestBytesToString(nextStoredTicks[k].prevUniverseDigest),
-                                                                                        computerDigest: digestBytesToString(nextStoredTicks[k].prevComputerDigest),
-
-                                                                                        transactionDigest: digestBytesToString(storedTicks[j].transactionDigest),
-                                                                                        expectedNextTickTransactionDigest: digestBytesToString(storedTicks[j].expectedNextTickTransactionDigest),
-                                                                                    });
-
-                                                                                    if (quorumTicks.size === numberOfStoredTicks) {
-                                                                                        quorumTicks.delete(quorumTicks.keys().next().value);
-                                                                                    }
-                                                                                    quorumTicks.set(quorumTick.tick, quorumTick);
-
-                                                                                    ticks.forEach(function (tick) {
-                                                                                        if (tick.tick <= quorumTick.tick) {
-                                                                                            ticks.delete(tick.tick);
-                                                                                            voteFlags.delete(tick.tick);
-                                                                                        }
-                                                                                    });
-
-                                                                                    tickHints.forEach(function (tickHint) {
-                                                                                        if (tickHint <= quorumTick) {
-                                                                                            tickHints.delete(tickHint);
-                                                                                        }
-                                                                                    });
-
-                                                                                    break;
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    
-                                                        if (quorumComputorIndices.length + (NUMBER_OF_COMPUTORS - j) < QUORUM) {
-                                                            break;
-                                                        }
+                                                    if (quorumTicks.size === numberOfStoredTicks) {
+                                                        quorumTicks.delete(quorumTicks.keys().next().value);
                                                     }
+                                                    quorumTicks.set(quorumTick.tick, quorumTick);
+
+                                                    tickHints.forEach(function (tickHint) {
+                                                        if (tickHint <= quorumTick.tick) {
+                                                            tickHints.delete(tickHint);
+                                                        }
+                                                    });
+
+                                                    break;
                                                 }
                                             }
                                         }
                                     }
 
-                                    if (quorumTick) {
+                                    if (quorumComputorIndices.length + (NUMBER_OF_COMPUTORS - j) < QUORUM) {
                                         break;
                                     }
                                 }
 
-                                if (i > NUMBER_OF_COMPUTORS - QUORUM) {
-                                    return;
+                                if (quorumTick) {
+                                    break;
                                 }
                             }
                         }
 
-                        if (quorumTick) {
-                            break;
+                        if (i > NUMBER_OF_COMPUTORS - QUORUM) {
+                            return undefined;
                         }
                     }
                 }
             }
 
-            if (quorumTick) {
+            return quorumTick;
+        };
+
+        const verify = async function (tick, peer) {
+            const nextQuorumTick = await detectQuorumTick(tick);
+            const quorumTick = await detectQuorumTick(tick - 1, nextQuorumTick);
+
+            if (quorumTick && nextQuorumTick) {
                 if (system.tick < quorumTick.tick) {
+                    if (currentTickInfoRequestingInterval === undefined) {
+                        requestCurrentTickInfo(peer);
+                        currentTickInfoRequestingInterval = setInterval(() => requestCurrentTickInfo(peer), TARGET_TICK_DURATION);
+                    }
+
+                    ticks.forEach(function (tick) {
+                        if (tick.tick <= quorumTick.tick) {
+                            ticks.delete(tick.tick);
+                            voteFlags.delete(tick.tick);
+                        }
+                    });
+
                     const now = Date.now();
 
                     if (system.tick > 0) {
@@ -398,7 +387,19 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         system.initialTick = system.tick;
                     }
 
-                    that.emit('tick', quorumTick);
+                    that.emit('tick', Object.freeze({
+                        tick: quorumTick.tick,
+                        epoch: quorumTick.epoch,
+                        timestamp: quorumTick.timestamp,
+
+                        resourceTestingDigest: nextQuorumTick.prevResourceTestingDigest,
+
+                        spectrumDigest: nextQuorumTick.prevSpectrumDigest,
+                        universeDigest: nextQuorumTick.prevUniverseDigest,
+                        computerDigest: nextQuorumTick.prevComputerDigest,
+
+                        transactionDigest: quorumTick.transactionDigest,
+                    }));
 
                     numberOfUpdatedEntities = 0;
                     numberOfClearedTransactions = 0;
@@ -416,7 +417,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 respondedEntity.spectrumDigest = await merkleRoot(respondedEntity.spectrumIndex, respondedEntity.digest, respondedEntity.siblings);
                             }
 
-                            if (digestBytesToString(respondedEntity.spectrumDigest) === quorumTick.spectrumDigest) {
+                            if (digestBytesToString(respondedEntity.spectrumDigest) === nextQuorumTick.prevSpectrumDigest) {
                                 const entity = entities.get(respondedEntity.id);
 
                                 if (entity !== undefined && ((entity.tick || 0) < (entity.tick = quorumTick.tick))) {
@@ -452,6 +453,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         entity.outgoingTransaction = undefined;
 
                                         if (IS_BROWSER) {
+                                            localStorage.setItem(entity.id + '-' + outgoingTransaction.tick.toString(), localStorage.getItem(entity.id));
                                             localStorage.removeItem(entity.id);
                                         } else {
                                             try {
@@ -459,9 +461,10 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                                 const fs = await importFs;
 
                                                 const file = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id);
+                                                const archive = file + '-' + outgoingTransaction.tick.toString();
 
                                                 if (fs.existsSync(file)) {
-                                                    fs.unlinkSync(file);
+                                                    fs.renameSync(file, archive);
                                                 }
                                             } catch (error) {
                                                 entity.transaction = outgoingTransactionCopy;
@@ -489,13 +492,14 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     entity.latestIncomingTransferTick = respondedEntity.latestIncomingTransferTick;
                                     entity.latestOutgoingTransferTick = respondedEntity.latestOutgoingTransferTick;
         
+                                    entity.tick = quorumTick.tick,
                                     entity.epoch = quorumTick.epoch;
                                     entity.timestamp = quorumTick.timestamp;
         
                                     entity.digest = digestBytesToString(respondedEntity.digest);
                                     entity.siblings = Object.freeze(Array(SPECTRUM_DEPTH).fill('').map((_, i) => digestBytesToString(respondedEntity.siblings.subarray(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH))));
                                     entity.spectrumIndex = respondedEntity.spectrumIndex;
-                                    entity.spectrumDigest = digestBytesToString(respondedEntity.spectrumDigest);
+                                    entity.spectrumDigest = nextQuorumTick.prevSpectrumDigest;
 
                                     numberOfUpdatedEntities++;
 
@@ -509,9 +513,9 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         latestIncomingTransferTick: entity.latestIncomingTransferTick,
                                         latestOutgoingTransferTick: entity.latestOutgoingTransferTick,
         
-                                        tick: entity.tick = quorumTick.tick,
+                                        tick: entity.tick,
                                         epoch: entity.epoch,
-                                        timestamp: entity.timestamp = quorumTick.timestamp,
+                                        timestamp: entity.timestamp,
         
                                         digest: entity.digest = digestBytesToString(respondedEntity.digest),
                                         siblings: entity.siblings,
@@ -762,11 +766,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                             ticks.get(receivedTick.tick)[computorIndex] = receivedTick;
 
-                                            if (ticks.get(receivedTick.tick).filter(t => t !== undefined).length > 0 && (ticks.get(receivedTick.tick - 1)?.filter(t => t !== undefined) || []).length >= QUORUM) {
-                                                if (entitiesByTick.has(receivedTick.tick - 1) || entities.size === 0) {
-                                                    await verify(receivedTick.tick - 1, peer);
-                                                }
-                                            }
+                                            await verify(receivedTick.tick, peer);
                                         } else if (
                                             !equal(receivedTick.time, storedTick.time) &&
                                             !equal(receivedTick.prevSpectrumDigest, storedTick.prevSpectrumDigest) &&
@@ -775,6 +775,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             !equal(receivedTick.transactionDigest, storedTick.transactionDigest) &&
                                             !equal(receivedTick.expectedNextTickTransactionDigest, storedTick.expectedNextTickTransactionDigest)
                                         ) {
+                                            // TODO: publish proof on blockchain
                                             epochs.get(epoch).faultyComputorFlags[computorIndex] = true;
                                             peer.ignore();
                                         }
@@ -814,7 +815,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 clearInterval(quorumTickRequestingInterval);
                                 quorumTickRequestingInterval = setInterval(async () => {
                                     await tickLock.acquire();
-                                    let tick = tickHint > system.tick ? tickHint : system.tick + 1;
+                                    let tick = tickHint > system.tick ? tickHint - 1 : system.tick + 1;
                                     if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
                                         requestQuorumTick(peer, tick);
                                     }
@@ -876,10 +877,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     tickEntities.set(respondedEntity.id, []);
                                 }
                                 tickEntities.get(respondedEntity.id).push(respondedEntity);
-                                if (ticks.has(respondedEntity.tick) && ticks.get(respondedEntity.tick).filter(t => t !== undefined).length >= QUORUM) {
-                                    await verify(respondedEntity.tick, peer);
-                                }
-                                
+
+                                await verify(respondedEntity.tick, peer);
                             }
                         }
 
@@ -983,9 +982,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             const temp = file + '-temp';
 
                             try  {
-                                if (!fs.existsSync(dir)) {
-                                    fs.mkdirSync(dir);
-                                } else {
+                                if (fs.existsSync(dir)) {
                                     if (fs.existsSync(temp)) {
                                         fs.unlinkSync(temp);
                                     } else if (fs.existsSync(file)) {
@@ -1153,6 +1150,36 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                 broadcastTransaction() {
                                     if (entity.outgoingTransaction !== undefined && entity.outgoingTransaction.tick > system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET) {
                                         _broadcastTransaction(entity.outgoingTransaction.bytes);
+                                    }
+                                },
+
+                                async removeTransaction(tick) {
+                                    if (entity.outgoingTransaction !== undefined) {
+                                        if (entity.outgoingTransaction.tick === tick) {
+                                            throw new Error('Transaction is pending, cannot be removed from archive');
+                                        }
+                                    }
+
+                                    if (IS_BROWSER) {
+                                        const transaction = localStorage.getItem(entity.id + '-' + tick.toString());
+
+                                        if (transaction) {
+                                            localStorage.setItem(entity.id, transaction);
+                                            localStorage.removeItem(entity.id);
+                                        } else {
+                                            throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
+                                        }
+                                    } else {
+                                        const path = await importPath;
+                                        const fs = await importFs;
+
+                                        const archive = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id + '-' + tick.toString());
+
+                                        if (fs.existsSync(archive)) {
+                                            fs.unlinkSync(archive);
+                                        } else {
+                                            throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
+                                        }
                                     }
                                 },
                             },

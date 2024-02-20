@@ -7,8 +7,8 @@ Only `RESPOND_ENTITY` is supported now. Support for assets and contracts will be
 
 There are 676 computors, elected by the miners who assign useful proofs of work. Computors issue special tick transactions to reach final agreement, which is detected as soon as 451 votes are found to be aligned (excluding own vote).
 Lite client verification routine collects and compares 451 votes signed by discrete computor public keys. This logic will be revisited after core is changed to rely on arb signature for faulty computors.
-Salted digests are evaluated by collecting revealed digests from votes on the next tick.
-Client may receive arbitrary data from `RESOND_ENTITY` message, for this reason we use such messages to calculate merkle root. The root is compared to the corresponding spectrum digest aligning with 451 tick votes.
+At least 451 prev tick votes and 451 current tick votes are compared against each othor, if aligned we detect _finality_ of prev tick.
+Client may receive arbitrary data from `RESOND_ENTITY` message, for this reason we use such messages to calculate merkle root. The root is compared to the corresponding prev spectrum digest aligning with 451 next tick votes.
 If matching, entity data are accepted, and we deduce execution status of issued transactions. Ticks can be skipped because issuance awaits status of previous transaction.
 
 ### Networking
@@ -60,9 +60,11 @@ client.connect([
 ### Transaction issuance
 > [!IMPORTANT]  
 > Only one transaction can be executed per entity per tick.
+>
+> While transactions may be _included_ in the blockchain it is not necessarily true that they were _executed_. This is why we rely on `RESPOND_ENTITY` data, and verify the merkle proof for the _spectrum_.
 
 > [!CAUTION]
-> Sharing private keys among different client and entity instances may result in invalid data emitted in `transfer` and `entity.outgoingTransaction` events, as well as accidental cancelation of transactions.
+> Sharing private keys among different client and entity instances may result in invalid data in `entity.outgoingTransaction` and `transfer` event, as well as accidental cancelation of transactions.
 > Synchronize transaction issuance with additional code if your use case reuires to support multiple instances simultaneously.
 
 To issue transaction create an entity as the source. A suitable execution tick can be used by awaiting `entity.executionTick()`, which is resolved once client is synced or after pending transaction is cleared.
@@ -121,9 +123,6 @@ client.addListener('transfer', function (transfer) {
     }
 });
 ```
-
-> [!IMPORTANT]  
-> While transactions may be _included_ in the blockchain it is not necessarily true that they were _executed_. This is why we rely on `RESPOND_ENTITY` data, and verify the merkle proof for the _spectrum_.
 
 ### Air gap scenario
 
