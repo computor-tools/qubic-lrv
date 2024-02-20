@@ -1,11 +1,10 @@
 {
   "name": "qubic-lrv",
+  "main": "./src/client.js",
   "module": "./src/client.js",
-  "devDependencies": {
-    "@types/bun": "latest"
+  "dependencies": {
+    "qubic-crypto": "github:computor-tools/qubic-crypto"
   },
-  "peerDependencies": {
-    "typescript": "^5.0.0"
-  },
+  "trustedDependencies": ["qubic-crypto"],
   "type": "module"
 }

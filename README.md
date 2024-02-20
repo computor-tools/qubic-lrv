@@ -24,6 +24,12 @@ Come-from-Beyond's [**Anti-Military License**](LICENSE).
 ```bash
 git clone https://github.com/computor-tools/qubic-lrv && cd qubic-lrv
 ```
+### Install dependencies
+Postinstall fetches dependencies (FourQlib, K12 & emsdk) from Github, executes GNU Make and emsdk scripts. Requires GNU Make to be already installed, [check CI](https://github.com/computor-tools/qubic-crypto/actions) for more info.
+
+```
+bun install --verbose
+```
 
 ### Run test
 
@@ -130,6 +136,6 @@ It is possible to sign transactions using `qubic.createTransaction`, which in co
 Result can be transported to a computer with internet connection and broadcasted with `client.broadcastTransaction`.
 Just make sure you calculate execution tick of transaction correctly to avoid walking back-and-forth.
 
-## Footnotes
+---
 
 This project was created using `bun init` in bun v1.0.20. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.

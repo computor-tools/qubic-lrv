@@ -50,53 +50,17 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import crypto from './crypto/index.js';
-import { ALPHABET, bytesToId, stringToSeedBytes } from './converter.js';
+import crypto from 'qubic-crypto';
+import { bytesToId } from './converter.js';
 
-export const SEED_LENGTH = 55;
+export const SEED_LENGTH = crypto.SEED_LENGTH;
 
-export const createPrivateKey = async function (seed, index = 0) {
-    if (Object.prototype.toString.call(seed) === '[object Uint8Array]' && seed.byteLength !== SEED_LENGTH) {
-        for (let i = 0; i < seed.length; i++) {
-            if (seed[i] > ALPHABET.indexOf('z')) {
-                throw new TypeError('Invalid seed.');
-            }
-        }
-    } else {
-        if (new RegExp(`^[a-z]{${SEED_LENGTH}}$`).test(seed) === false) {
-            throw new TypeError('Invalid seed.');
-        }
-
-        seed = stringToSeedBytes(seed);
-    }
-
-    if (!Number.isInteger(index)) {
-        throw new TypeError('Invalid index');
-    }
-
-    const { K12 } = await crypto;
-
-    const privateKey = new Uint8Array(crypto.PRIVATE_KEY_LENGTH);
-    const preimage = seed.slice();
-
-    while (index-- > 0) {
-        for (let i = 0; i < preimage.length; i++) {
-            if (++preimage[i] > ALPHABET.length) {
-                preimage[i] = 1;
-            } else {
-                break;
-            }
-        }
-    }
-    K12(preimage, privateKey, crypto.PRIVATE_KEY_LENGTH);
-
-    return privateKey;
-};
+export const createPrivateKey = crypto.createPrivateKey;
 
 export const createId = async function (privateKey) {
     if (Object.prototype.toString.call(privateKey) !== '[object Uint8Array]' || privateKey.byteLength !== crypto.PRIVATE_KEY_LENGTH) {
         throw new TypeError('Invalid private key.');
     }
 
-    return bytesToId((await crypto).schnorrq.generatePublicKey(privateKey));
+    return bytesToId(await crypto.generatePublicKey(privateKey));
 };

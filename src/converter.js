@@ -50,7 +50,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import crypto from './crypto/index.js';
+import crypto from 'qubic-crypto';
 
 export const LE = true;
 
@@ -158,9 +158,8 @@ export const stringToBytes64 = function (s) {
 }
 
 const checksum = async function (publicKey) {
-  const { K12 } = await crypto;
   const buffer = new Uint8Array(4);
-  K12(publicKey.slice(), buffer, 4);
+  await crypto.K12(publicKey.slice(), buffer, 4);
 
   let checksum = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0, LE) & 0x3FFFF;
   let s = '';

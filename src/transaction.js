@@ -50,7 +50,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import crypto from './crypto/index.js';
+import crypto from 'qubic-crypto';
 import { idToBytes, digestBytesToString, bytes64ToString, bytesToId } from './converter.js';
 import { MAX_AMOUNT, MAX_NUMBER_OF_CONTRACTS, NUMBER_OF_COMPUTORS } from './constants.js';
 import { isZero } from './utils.js';
@@ -120,15 +120,14 @@ export const inspectTransaction = async function (transaction) {
         throw new TypeError('Assumed contract index to be safe integer.');
     }
 
-    const { K12, schnorrq } = await crypto;
     const transactionView = new DataView(transaction.buffer, transaction.byteOffset);
     const inputSize = transactionView.getUint16(TRANSACTION.INPUT_SIZE_OFFSET, true);
     const digest = new Uint8Array(crypto.DIGEST_LENGTH);
     const signature = transaction.subarray(TRANSACTION.INPUT_OFFSET + inputSize, TRANSACTION.length(inputSize));
 
-    K12(transaction.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
+    await crypto.K12(transaction.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
 
-    if (!schnorrq.verify(transaction.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET,  TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH), digest, signature)) {
+    if (!(await crypto.verify(transaction.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET,  TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH), digest, signature))) {
         throw new Error('Invalid transaction signature!');
     }
 
@@ -264,11 +263,10 @@ export const createTransaction = async function (sourcePrivateKey, {
     transactionView.setBigUint64(TRANSACTION.AMOUNT_OFFSET, amount, true);
     transactionView.setUint32(TRANSACTION.TICK_OFFSET, tick, true);
   
-    const { K12, schnorrq } = await crypto;
     const digest = new Uint8Array(crypto.DIGEST_LENGTH);
-    K12(transaction.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
+    await crypto.K12(transaction.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
 
-    transaction.set(schnorrq.sign(sourcePrivateKey, sourcePublicKey, digest), TRANSACTION.INPUT_OFFSET + inputSize);
+    transaction.set(await crypto.sign(sourcePrivateKey, sourcePublicKey, digest), TRANSACTION.INPUT_OFFSET + inputSize);
 
     return inspectTransaction(transaction);
 };

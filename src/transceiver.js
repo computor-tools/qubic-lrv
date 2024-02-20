@@ -50,7 +50,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import crypto from './crypto/index.js';
+import crypto from 'qubic-crypto';
 import { NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH } from './constants.js';
 import { TRANSACTION } from './transaction.js';
 

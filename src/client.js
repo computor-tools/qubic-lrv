@@ -51,7 +51,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 'use strict'
 
 import EventEmitter from 'events';
-import crypto from './crypto/index.js';
+import crypto from 'qubic-crypto';
 import { CHECKPOINT } from './checkpoint.js';
 import {
     ARBITRATOR,
@@ -125,7 +125,6 @@ const inferEpoch = function() {
 };
 
 const merkleRoot = async function (spectrumIndex, digest, siblings) {
-    const { K12 } = await crypto;
     const pair = new Uint8Array(crypto.DIGEST_LENGTH * 2);
     const root = new Uint8Array(crypto.DIGEST_LENGTH);
 
@@ -139,7 +138,7 @@ const merkleRoot = async function (spectrumIndex, digest, siblings) {
             pair.set(siblings.slice(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH));
             pair.set(root, crypto.DIGEST_LENGTH);
         }
-        K12(pair, root, crypto.DIGEST_LENGTH);
+        await crypto.K12(pair, root, crypto.DIGEST_LENGTH);
 
         spectrumIndex >>= 1;
     }
@@ -236,27 +235,26 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                 const storedTicks = ticks.get(tick) || [];
 
                 if (storedTicks.filter(storedTick => storedTick !== undefined).length >= QUORUM) {
-                    const { K12 } = await crypto;
                     const saltedDigest = new Uint8Array(crypto.DIGEST_LENGTH);
                     const saltedData = new Uint8Array(crypto.PUBLIC_KEY_LENGTH + crypto.DIGEST_LENGTH);
 
-                    const isPrevTick = function (storedTick) { // verify stored tick matches completed prev tick
+                    const isPrevTick = async function (storedTick) { // verify stored tick matches completed prev tick
                         if (nextQuorumTick) {
                             saltedData.set(storedTick.computorPublicKey);
                             saltedData.set(nextQuorumTick.prevResourceTestingDigest, crypto.PUBLIC_KEY_LENGTH);
-                            K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
+                            await crypto.K12(saltedData.subarray(0, crypto.PUBLIC_KEY_LENGTH + BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH), saltedDigest, BROADCAST_TICK.RESOURCE_TESTING_DIGEST_LENGTH);
 
                             if (equal(saltedDigest, storedTick.saltedResourceTestingDigest)) {
                                 saltedData.set(nextQuorumTick.prevSpectrumDigest, crypto.PUBLIC_KEY_LENGTH);
-                                K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                await crypto.K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
 
                                 if (equal(saltedDigest, storedTick.saltedSpectrumDigest)) {
                                     saltedData.set(nextQuorumTick.prevUniverseDigest, crypto.PUBLIC_KEY_LENGTH);
-                                    K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                    await crypto.K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
 
                                     if (equal(saltedDigest, storedTick.saltedUniverseDigest)) {
                                         saltedData.set(nextQuorumTick.prevComputerDigest, crypto.PUBLIC_KEY_LENGTH);
-                                        K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
+                                        await crypto.K12(saltedData, saltedDigest, crypto.DIGEST_LENGTH);
 
                                         if (equal(saltedDigest, storedTick.saltedComputerDigest)) {
                                             return true;
@@ -271,7 +269,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                     for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
                         if (storedTicks[i] !== undefined) {
-                            if (!nextQuorumTick || isPrevTick(storedTicks[i])) {
+                            if (!nextQuorumTick || await isPrevTick(storedTicks[i])) {
                                 const quorumComputorIndices = [storedTicks[i].computorIndex];
 
                                 for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
@@ -284,7 +282,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             equal(storedTicks[i].prevComputerDigest, storedTicks[j].prevComputerDigest) &&
                                             equal(storedTicks[i].transactionDigest, storedTicks[j].transactionDigest)
                                         ) {
-                                            if (!nextQuorumTick || isPrevTick(storedTicks[j])) {
+                                            if (!nextQuorumTick || await isPrevTick(storedTicks[j])) {
                                                 quorumComputorIndices.push(storedTicks[j].computorIndex);
 
                                                 if (quorumComputorIndices.length === QUORUM) {
@@ -414,7 +412,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                     for (const tickEntities of entitiesByTick.get(quorumTick.tick).values()) {
                         for (const respondedEntity of tickEntities) {
                             if (isZero(respondedEntity.spectrumDigest)) {
-                                respondedEntity.spectrumDigest = await merkleRoot(respondedEntity.spectrumIndex, respondedEntity.digest, respondedEntity.siblings);
+                                await crypto.merkleRoot(SPECTRUM_DEPTH, respondedEntity.spectrumIndex, respondedEntity.data, respondedEntity.siblings, respondedEntity.spectrumDigest);
                             }
 
                             if (digestBytesToString(respondedEntity.spectrumDigest) === nextQuorumTick.prevSpectrumDigest) {
@@ -495,11 +493,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     entity.tick = quorumTick.tick,
                                     entity.epoch = quorumTick.epoch;
                                     entity.timestamp = quorumTick.timestamp;
-        
-                                    entity.digest = digestBytesToString(respondedEntity.digest);
+
                                     entity.siblings = Object.freeze(Array(SPECTRUM_DEPTH).fill('').map((_, i) => digestBytesToString(respondedEntity.siblings.subarray(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH))));
                                     entity.spectrumIndex = respondedEntity.spectrumIndex;
                                     entity.spectrumDigest = nextQuorumTick.prevSpectrumDigest;
+
+                                    const digest = new Uint8Array(crypto.DIGEST_LENGTH);
+                                    await crypto.K12(respondedEntity.data, digest, crypto.DIGEST_LENGTH);
 
                                     numberOfUpdatedEntities++;
 
@@ -517,7 +517,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         epoch: entity.epoch,
                                         timestamp: entity.timestamp,
         
-                                        digest: entity.digest = digestBytesToString(respondedEntity.digest),
+                                        digest: digestBytesToString(digest),
                                         siblings: entity.siblings,
                                         spectrumIndex: entity.spectrumIndex,
                                         spectrumDigest: entity.spectrumDigest,
@@ -572,11 +572,9 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         const inferredEpoch = inferEpoch();
 
                         if (receivedComputors.epoch <= inferredEpoch) {
-                            const { K12, schnorrq } = await crypto;
+                            await crypto.K12(message.subarray(BROADCAST_COMPUTORS.EPOCH_OFFSET, BROADCAST_COMPUTORS.SIGNATURE_OFFSET), receivedComputors.digest, crypto.DIGEST_LENGTH);
 
-                            K12(message.subarray(BROADCAST_COMPUTORS.EPOCH_OFFSET, BROADCAST_COMPUTORS.SIGNATURE_OFFSET), receivedComputors.digest, crypto.DIGEST_LENGTH);
-
-                            if (schnorrq.verify(await ARBITRATOR_BYTES, receivedComputors.digest, receivedComputors.signature)) {
+                            if (await crypto.verify(await ARBITRATOR_BYTES, receivedComputors.digest, receivedComputors.signature)) {
 
                                 await tickLock.acquire();
 
@@ -599,9 +597,9 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         checkpointBytes.set(await idToBytes(CHECKPOINT.computorPublicKeys[i]), offset);
                                     }
 
-                                    K12(checkpointBytes, checkpoint.digest, crypto.DIGEST_LENGTH);
+                                    await crypto.K12(checkpointBytes, checkpoint.digest, crypto.DIGEST_LENGTH);
 
-                                    if (schnorrq.verify(await ARBITRATOR_BYTES, checkpoint.digest, checkpoint.signature)) {
+                                    if (await crypto.verify(await ARBITRATOR_BYTES, checkpoint.digest, checkpoint.signature)) {
                                         epochs.set((system.epoch = CHECKPOINT.epoch), checkpoint);
                                     } else {
                                         throw new Error('Invalid checkpoint signature!');
@@ -751,12 +749,11 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     receivedTick.second <= 59 &&
                                     receivedTick.millisecond <= 999
                                 ) {
-                                    const { K12, schnorrq } = await crypto;
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
-                                    K12(message.subarray(BROADCAST_TICK.COMPUTOR_INDEX_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET), receivedTick.digest, crypto.DIGEST_LENGTH);
+                                    await crypto.K12(message.subarray(BROADCAST_TICK.COMPUTOR_INDEX_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET), receivedTick.digest, crypto.DIGEST_LENGTH);
                                     message[BROADCAST_TICK.COMPUTOR_INDEX_OFFSET] ^= BROADCAST_TICK.TYPE;
 
-                                    if (schnorrq.verify(receivedTick.computorPublicKey, receivedTick.digest, receivedTick.signature)) {
+                                    if (await crypto.verify(receivedTick.computorPublicKey, receivedTick.digest, receivedTick.signature)) {
                                         const storedTick = ticks.get(receivedTick.tick)?.[computorIndex];
 
                                         if (storedTick === undefined) {
@@ -854,15 +851,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             numberOfOutgoingTransfers: messageView.getUint32(RESPOND_ENTITY.NUMBER_OF_OUTGOING_TRANSFERS_OFFSET, true),
                             latestIncomingTransferTick: messageView.getUint32(RESPOND_ENTITY.LATEST_INCOMING_TRANSFER_TICK_OFFSET, true),
                             latestOutgoingTransferTick: messageView.getUint32(RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET, true),
-                            digest: new Uint8Array(crypto.DIGEST_LENGTH),
+                            data: message.slice(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET + BROADCAST_TICK.TICK_LENGTH),
                             tick: messageView.getUint32(RESPOND_ENTITY.TICK_OFFSET, true),
                             spectrumIndex: messageView.getUint32(RESPOND_ENTITY.SPECTRUM_INDEX_OFFSET, true),
                             siblings: message.subarray(RESPOND_ENTITY.SIBLINGS_OFFSET, RESPOND_ENTITY.SIBLINGS_OFFSET + RESPOND_ENTITY.SIBLINGS_LENGTH),
                             spectrumDigest: new Uint8Array(crypto.DIGEST_LENGTH),
                             peer,
                         };
-
-                        (await crypto).K12(message.slice(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.LATEST_OUTGOING_TRANSFER_TICK_OFFSET + BROADCAST_TICK.TICK_LENGTH), respondedEntity.digest, crypto.DIGEST_LENGTH);
 
                         await tickLock.acquire();
 
@@ -955,7 +950,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         if (entity === undefined) {
                             entities.set(id, (entity = {
                                 id,
-                                publicKey: (await crypto).schnorrq.generatePublicKey(privateKey),
+                                publicKey: await crypto.generatePublicKey(privateKey),
                                 outgoingTransaction: undefined,
                                 emitter: those,
                             }));
