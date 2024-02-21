@@ -1,20 +1,25 @@
-<svg width="185.4" height="20" viewBox="0 0 1854 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="test (96 | 12597918): &apos;passing&apos;">
-  <title>test (96 | 12597918): &apos;passing&apos;</title>
+<svg width="182.9" height="20" viewBox="0 0 1829 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Test: 96 | 12598000: &apos;passing&apos;">
+  <title>Test: 96 | 12598000: &apos;passing&apos;</title>
   <linearGradient id="a" x2="0" y2="100%">
     <stop offset="0" stop-opacity=".1" stop-color="#EEE"/>
     <stop offset="1" stop-opacity=".1"/>
   </linearGradient>
-  <mask id="m"><rect width="1854" height="200" rx="30" fill="#FFF"/></mask>
+  <mask id="m"><rect width="1829" height="200" rx="30" fill="#FFF"/></mask>
   <g mask="url(#m)">
-    <rect width="1276" height="200" fill="#555"/>
-    <rect width="578" height="200" fill="#'green'" x="1276"/>
-    <rect width="1854" height="200" fill="url(#a)"/>
+    <rect width="1251" height="200" fill="#555"/>
+    <rect width="578" height="200" fill="url(#x)" x="1251"/>
+    <rect width="1829" height="200" fill="url(#a)"/>
   </g>
   <g aria-hidden="true" fill="#fff" text-anchor="start" font-family="Verdana,DejaVu Sans,sans-serif" font-size="110">
-    <text x="60" y="148" textLength="1176" fill="#000" opacity="0.25">test (96 | 12597918)</text>
-    <text x="50" y="138" textLength="1176">test (96 | 12597918)</text>
-    <text x="1331" y="148" textLength="478" fill="#000" opacity="0.25">&apos;passing&apos;</text>
-    <text x="1321" y="138" textLength="478">&apos;passing&apos;</text>
+    <text x="60" y="148" textLength="1151" fill="#000" opacity="0.25">Test: 96 | 12598000</text>
+    <text x="50" y="138" textLength="1151">Test: 96 | 12598000</text>
+    <text x="1306" y="148" textLength="478" fill="#000" opacity="0.25">&apos;passing&apos;</text>
+    <text x="1296" y="138" textLength="478">&apos;passing&apos;</text>
   </g>
   
+  <linearGradient id="x" x1="0%" y1="0%" x2="100%" y2="0%">
+    <stop offset="0%" style="stop-color:#'green'" />
+    <stop offset="50%" style="stop-color:#555" />
+    <stop offset="100%" style="stop-color:#'green'" />
+  </linearGradient>
 </svg>
