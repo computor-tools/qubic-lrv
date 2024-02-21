@@ -9,10 +9,16 @@ on:
           - 'main'
 
 jobs:
-  build:
-    name: build
+  test:
+    name: test
     runs-on: ubuntu-latest
+    outputs:
+        epoch: ${{steps.test.outputs.epoch}}
+        tick: ${{steps.test.outputs.tick}}
+        status: ${{steps.test.outputs.status}}
+        color: ${{steps.test.outputs.color}}
     steps:
+    
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
@@ -20,4 +26,41 @@ jobs:
 
       - run: sudo apt-get install -y xsltproc
       - run: bun install --verbose
-      - run: PEERS="${{secrets.PEERS}}" SEED="${{secrets.SEED}}" bun test-ci.js
+      - id: test
+        run: PEERS="${{secrets.PEERS}}" SEED="${{secrets.SEED}}" bun test-ci.js
+
+  badge:
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ github.actor != 'github-actions' && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Create badges dir
+        run: mkdir -p '.github/badges/'
+        
+        # Use the output from the `coverage` step
+      - name: Generate badge svg
+        uses: emibcn/badge-action@v2.0.3
+        id: badge
+        with:
+            label: "Test: ${{needs.test.outputs.epoch}} | ${{needs.test.outputs.tick}}"
+            status: ${{needs.test.outputs.status}}
+            color: '${{needs.test.outputs.color}}, ${{needs.test.outputs.color}}, ${{needs.test.outputs.color}}'
+            path: '.github/badges/test.svg'
+        
+      - name: Upload badge as artifact
+        uses: actions/upload-artifact@v4
+        with:
+            name: badge
+            path: '.github/badges/test.svg'
+            if-no-files-found: error
+        
+      - continue-on-error: true
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .github/badges/test.svg
+          git commit -m "generated test badge"
+          git push
