@@ -45,13 +45,13 @@ jobs:
             label: "${{needs.test.outputs.epoch}} | ${{needs.test.outputs.tick}}"
             status: ${{needs.test.outputs.status}}
             color: ${{needs.test.outputs.color}}
-            path: './github/badges/test.svg'
+            path: '.github/badges/test.svg'
         
       - name: Upload badge as artifact
         uses: actions/upload-artifact@v4
         with:
             name: badge
-            path: './github/badges/test.svg'
+            path: '.github/badges/test.svg'
             if-no-files-found: error
         
       - uses: actions/checkout@v4
