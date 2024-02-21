@@ -1,5 +1,5 @@
-<svg width="176.9" height="20" viewBox="0 0 1769 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Test: 97 | 12600060: passing">
-  <title>Test: 97 | 12600060: passing</title>
+<svg width="176.9" height="20" viewBox="0 0 1769 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Test: 97 | 12600681: passing">
+  <title>Test: 97 | 12600681: passing</title>
   <linearGradient id="a" x2="0" y2="100%">
     <stop offset="0" stop-opacity=".1" stop-color="#EEE"/>
     <stop offset="1" stop-opacity=".1"/>
@@ -11,8 +11,8 @@
     <rect width="1769" height="200" fill="url(#a)"/>
   </g>
   <g aria-hidden="true" fill="#fff" text-anchor="start" font-family="Verdana,DejaVu Sans,sans-serif" font-size="110">
-    <text x="60" y="148" textLength="1151" fill="#000" opacity="0.25">Test: 97 | 12600060</text>
-    <text x="50" y="138" textLength="1151">Test: 97 | 12600060</text>
+    <text x="60" y="148" textLength="1151" fill="#000" opacity="0.25">Test: 97 | 12600681</text>
+    <text x="50" y="138" textLength="1151">Test: 97 | 12600681</text>
     <text x="1306" y="148" textLength="418" fill="#000" opacity="0.25">passing</text>
     <text x="1296" y="138" textLength="418">passing</text>
   </g>
