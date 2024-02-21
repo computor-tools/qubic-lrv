@@ -57,8 +57,8 @@ const test = async function ({ pingPongAmount }) {
     if (process.env.PEERS === undefined) {
         await exec(`echo "epoch=0" >> "$GITHUB_OUTPUT"`);
         await exec(`echo "tick=0" >> "$GITHUB_OUTPUT"`);
-        await exec(`echo "color='red'" >> "$GITHUB_OUTPUT"`);
-        await exec(`echo "status='failing'" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "color=E43" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "status=failing" >> "$GITHUB_OUTPUT"`);
         console.log('Expected PEERS env var. Test failed!');
         process.exit(1);
     }
@@ -96,8 +96,8 @@ const test = async function ({ pingPongAmount }) {
             if (transfer.executed) {
                 await exec(`echo "epoch=${system.epoch}" >> "$GITHUB_OUTPUT"`);
                 await exec(`echo "tick=${system.tick}" >> "$GITHUB_OUTPUT"`);
-                await exec(`echo "color='green'" >> "$GITHUB_OUTPUT"`);
-                await exec(`echo "status='passing'" >> "$GITHUB_OUTPUT"`);
+                await exec(`echo "color=3C1" >> "$GITHUB_OUTPUT"`);
+                await exec(`echo "status=passing" >> "$GITHUB_OUTPUT"`);
                 console.log('PASSED');
                 process.exit(0);
             } else { // retry tx
@@ -151,8 +151,8 @@ const test = async function ({ pingPongAmount }) {
     } else {
         await exec(`echo "epoch=0" >> "$GITHUB_OUTPUT"`);
         await exec(`echo "tick=0" >> "$GITHUB_OUTPUT"`);
-        await exec(`echo "color='red'" >> "$GITHUB_OUTPUT"`);
-        await exec(`echo "status='failing'" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "color=E43" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "status=failing" >> "$GITHUB_OUTPUT"`);
         console.log('Expected seed. Test failed!');
         process.exit(1);
     }
