@@ -32,7 +32,7 @@ jobs:
   badge:
     runs-on: ubuntu-latest
     needs: test
-    if: ${{ github.actor != 'github-actions' && github.event_name == 'pull_request' }}
+    if: ${{ github.actor != 'github-actions' && (github.event_name == 'pull_request' || github.event_name == 'push') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,9 +45,9 @@ jobs:
         uses: emibcn/badge-action@v2.0.3
         id: badge
         with:
-            label: "test (${{needs.test.outputs.epoch}} | ${{needs.test.outputs.tick}})"
+            label: "Test: ${{needs.test.outputs.epoch}} | ${{needs.test.outputs.tick}}"
             status: ${{needs.test.outputs.status}}
-            color: ${{needs.test.outputs.color}}
+            color: '${{needs.test.outputs.color}}, 555, ${{needs.test.outputs.color}}'
             path: '.github/badges/test.svg'
         
       - name: Upload badge as artifact
