@@ -34,6 +34,7 @@ jobs:
     needs: test
     if: ${{ always() }}
     steps:
+      - uses: actions/checkout@v4
       - name: Create badges dir
         run: mkdir -p '.github/badges/'
         
@@ -54,11 +55,10 @@ jobs:
             path: '.github/badges/test.svg'
             if-no-files-found: error
         
-      - uses: actions/checkout@v4
-        continue-on-error: true
+      - continue-on-error: true
       - run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git add ".github/badges/test.svg"
+          git add .github/badges/test.svg
           git commit -m "generated test badge"
           git push
