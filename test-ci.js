@@ -102,22 +102,22 @@ const test = async function ({ pingPongAmount }) {
                 process.exit(0);
             } else { // retry tx
                 try {
-                    const privateKey = transaction.sourceId === Alice.id ? privateKeys.Alice : privateKeys.Bob;
-                    const source = transaction.sourceId === Alice.id ? Alice : Bob;
+                    const privateKey = transfer.sourceId === Alice.id ? privateKeys.Alice : privateKeys.Bob;
+                    const source = transfer.sourceId === Alice.id ? Alice : Bob;
 
                     transaction = await source.createTransaction(
                         privateKey,
                         {
-                            destinationId: transaction.destinationId,
-                            amount: transaction.amount,
+                            destinationId: transfer.destinationId,
+                            amount: transfer.amount,
                             tick: await source.executionTick(),
                         }
                     );
                     source.broadcastTransaction();
 
-                    console.log('Tx:', transaction.digest, transaction.tick);
+                    console.log('Tx    :',  transaction.tick, transaction.sourceId + '->' + transaction.destinationId, transaction.digest);
                 } catch (error) {
-                    console.log('Error:', error.message);
+                    console.log(error.message);
                 }
             }
         });
@@ -131,7 +131,7 @@ const test = async function ({ pingPongAmount }) {
                     const source = entity.id === Alice.id ? Alice : Bob;
 
                     try {
-                        const transaction = await source.createTransaction(
+                        transaction = await source.createTransaction(
                             privateKey,
                             {
                                 destinationId: source.id === Alice.id ? Bob.id : Alice.id,
@@ -141,9 +141,9 @@ const test = async function ({ pingPongAmount }) {
                         );
                         source.broadcastTransaction(); // broadcasts the latest non-processed transaction
 
-                        console.log('Tx:', transaction.digest, transaction.tick);
+                        console.log('Tx    :',  transaction.tick, transaction.sourceId + '->' + transaction.destinationId, transaction.digest);
                     } catch (error) {
-                        console.log('Error:', error.message);
+                        console.log(error.message);
                     }
                 }
             }
