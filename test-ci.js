@@ -50,19 +50,29 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
+import { exec } from 'node:child_process';
 import * as qubic from './src/client.js';
 
 const test = async function ({ pingPongAmount }) {
     if (process.env.PEERS === undefined) {
+        await exec(`echo "epoch=0" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "tick=0" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "color='red'" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "status='failing'" >> "$GITHUB_OUTPUT"`);
         console.log('Expected PEERS env var. Test failed!');
         process.exit(1);
     }
 
+    const system = {
+        epoch: 0,
+        tick: 0,
+    };
+
     const client = qubic.createClient();
 
-    client.addListener('epoch', (epoch) => console.log('Epoch:', epoch.epoch));
+    client.addListener('epoch', (epoch) => console.log('Epoch:', (system.epoch = epoch.epoch)));
 
-    client.addListener('tick', (tick) => console.log('\nTick  :', tick.tick, tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
+    client.addListener('tick', (tick) => console.log('\nTick  :', (system.tick = tick.tick), tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
     client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
 
     client.addListener('error', (error) => console.log(error));
@@ -84,6 +94,10 @@ const test = async function ({ pingPongAmount }) {
             console.log('Transfer:', transfer);
 
             if (transfer.executed) {
+                await exec(`echo "epoch=${system.epoch}" >> "$GITHUB_OUTPUT"`);
+                await exec(`echo "tick=${system.tick}" >> "$GITHUB_OUTPUT"`);
+                await exec(`echo "color='green'" >> "$GITHUB_OUTPUT"`);
+                await exec(`echo "status='passing'" >> "$GITHUB_OUTPUT"`);
                 console.log('PASSED');
                 process.exit(0);
             } else { // retry tx
@@ -135,6 +149,10 @@ const test = async function ({ pingPongAmount }) {
             }
         });
     } else {
+        await exec(`echo "epoch=0" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "tick=0" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "color='red'" >> "$GITHUB_OUTPUT"`);
+        await exec(`echo "status='failing'" >> "$GITHUB_OUTPUT"`);
         console.log('Expected seed. Test failed!');
         process.exit(1);
     }
