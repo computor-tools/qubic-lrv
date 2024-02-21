@@ -47,7 +47,7 @@ jobs:
         with:
             label: "Test: ${{needs.test.outputs.epoch}} | ${{needs.test.outputs.tick}}"
             status: ${{needs.test.outputs.status}}
-            color: '${{needs.test.outputs.color}}, 555, ${{needs.test.outputs.color}}'
+            color: '${{needs.test.outputs.color}}, ${{needs.test.outputs.color}}, ${{needs.test.outputs.color}}'
             path: '.github/badges/test.svg'
         
       - name: Upload badge as artifact
