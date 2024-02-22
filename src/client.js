@@ -586,59 +586,62 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                 if (epochs.has(receivedComputors.epoch)) {
                                     if (equal(epochs.get(receivedComputors.epoch).digest, receivedComputors.digest)) {
-                                        uniquePeersByEpoch.get(receivedComputors.epoch).add(peer.address);
+                                        if (receivedComputors.epoch > system.epoch) {
+                                            uniquePeersByEpoch.get(receivedComputors.epoch).add(peer.address);
 
-                                        for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
-                                            if (!epochs.has(i) || (uniquePeersByEpoch.get(i).size < (Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1))) {
-                                                tickLock.release();
-                                                return;
+                                            for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
+                                                if (!epochs.has(i) || (uniquePeersByEpoch.get(i).size < (Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1))) {
+                                                    tickLock.release();
+                                                    return;
+                                                }
                                             }
-                                        }
-                                        for (let i = system.epoch; i < inferredEpoch; i++) {
-                                            let numberOfReplacedComputors = 0;
-    
-                                            for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
-                                                if (epochs.get(i + 1).computorPublicKeyStrings.indexOf(epochs.get(i).computorPublicKeyStrings[j]) === -1) {
-                                                    if (++numberOfReplacedComputors > NUMBER_OF_COMPUTORS - QUORUM) {
-                                                        system.epoch = 0x10000;
-                                                        that.emit('error', new Error(`Illegal number of replaced computors! (epoch ${i + 1}). Replace arbitrator.`));
+                                            for (let i = system.epoch; i < inferredEpoch; i++) {
+                                                let numberOfReplacedComputors = 0;
+
+                                                for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
+                                                    if (epochs.get(i + 1).computorPublicKeyStrings.indexOf(epochs.get(i).computorPublicKeyStrings[j]) === -1) {
+                                                        if (++numberOfReplacedComputors > NUMBER_OF_COMPUTORS - QUORUM) {
+                                                            system.epoch = 0x10000;
+                                                            that.emit('error', new Error(`Illegal number of replaced computors! (epoch ${i + 1}). Replace arbitrator.`));
+                                                        }
                                                     }
                                                 }
                                             }
-                                        }
-    
-                                        if (inferredEpoch > system.epoch) {
-                                            const epoch = epochs.get(inferredEpoch);
-    
-                                            system.epoch = epoch.epoch;
-    
-                                            that.emit('epoch', {
-                                                epoch: epoch.epoch,
-                                                computorPublicKeys: epoch.computorPublicKeyStrings,
-    
-                                                digest: digestBytesToString(epoch.digest),
-                                                signature: bytes64ToString(epoch.signature),
-                                            });
-                                        }
 
+                                            if (inferredEpoch > system.epoch) {
+                                                const epoch = epochs.get(inferredEpoch);
 
-                                        if (quorumTickRequestingInterval === undefined && currentTickInfoRequestingInterval === undefined) {
-                                            requestCurrentTickInfo(peer);
+                                                system.epoch = epoch.epoch;
+
+                                                that.emit('epoch', {
+                                                    epoch: epoch.epoch,
+                                                    computorPublicKeys: epoch.computorPublicKeyStrings,
+
+                                                    digest: digestBytesToString(epoch.digest),
+                                                    signature: bytes64ToString(epoch.signature),
+                                                });
+                                            }
+
+                                            if (quorumTickRequestingInterval === undefined && currentTickInfoRequestingInterval === undefined) {
+                                                requestCurrentTickInfo(peer);
+                                            }
                                         }
                                     } else {
                                         system.epoch = 0x10000;
                                         that.emit('error', new Error('Replace arbitrator.'));
                                     }
                                 } else {
-                                    for (let i = 0, offset = BROADCAST_COMPUTORS.PUBLIC_KEYS_OFFSET; i < NUMBER_OF_COMPUTORS; i++) {
-                                        receivedComputors.computorPublicKeys[i] = message.slice(offset, (offset += crypto.PUBLIC_KEY_LENGTH));
-                                        receivedComputors.computorPublicKeyStrings[i] = await bytesToId(receivedComputors.computorPublicKeys[i]);
-                                    }
-                                    epochs.set(receivedComputors.epoch, receivedComputors);
+                                    if (receivedComputors.epoch > system.epoch) {
+                                        for (let i = 0, offset = BROADCAST_COMPUTORS.PUBLIC_KEYS_OFFSET; i < NUMBER_OF_COMPUTORS; i++) {
+                                            receivedComputors.computorPublicKeys[i] = message.slice(offset, (offset += crypto.PUBLIC_KEY_LENGTH));
+                                            receivedComputors.computorPublicKeyStrings[i] = await bytesToId(receivedComputors.computorPublicKeys[i]);
+                                        }
+                                        epochs.set(receivedComputors.epoch, receivedComputors);
 
-                                    const uniquePeers = new Set();
-                                    uniquePeers.add(peer.address);
-                                    uniquePeersByEpoch.set(receivedComputors.epoch, uniquePeers);
+                                        const uniquePeers = new Set();
+                                        uniquePeers.add(peer.address);
+                                        uniquePeersByEpoch.set(receivedComputors.epoch, uniquePeers);
+                                    }
                                 }
                             } else {
                                 peer.ignore();
