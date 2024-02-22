@@ -12,7 +12,7 @@ There are 676 computors, elected by the miners who assign useful proofs of work.
 Lite client verification routine collects and compares 451 votes signed by discrete computor public keys. This logic will be revisited after core is changed to rely on arb signature for faulty computors.
 At least 451 prev tick votes and 451 current tick votes are compared against each other, if aligned we detect _finality_ of prev tick.
 
-Client may receive arbitrary data from `RESOND_ENTITY` message, for this reason we use such messages to calculate merkle root. The root is compared to the corresponding prev spectrum digest aligning with 451 next tick votes.
+Client may receive arbitrary data from `RESOND_ENTITY` message, for this reason we use such messages to calculate merkle root. The root is compared to the corresponding prev spectrum digest aligning in 451 next tick votes.
 If matching, entity data are accepted and we deduce execution status of issued transactions. Ticks can be skipped because issuance awaits status of previous transaction.
 
 ### Networking
@@ -24,7 +24,7 @@ Using pub/sub vs tcp and websocket polling to fetch entity data is also being ex
 ## License
 Come-from-Beyond's [**Anti-Military License**](LICENSE).
 
-For licenses of microsoft/FourQlib and XKCP/K12 dependencies refer to [qubic-crypto](https://github.com/computor-tools/qubic-crypto/blob/main/LICENSE) repo.
+For licenses of Microsoft/FourQlib and XKCP/K12 dependencies refer to [qubic-crypto](https://github.com/computor-tools/qubic-crypto/blob/main/LICENSE) repo.
 
 ## Usage
 ```bash
@@ -139,9 +139,13 @@ client.addListener('transfer', function (transfer) {
 
 ### Air gap scenario
 
-It is possible to sign transactions using `qubic.createTransaction`, which in contrast to `entity.createTransaction` does not require a client connected to Qubic network.
-Result can be transported to a computer with internet connection and broadcasted with `client.broadcastTransaction`.
+As a network security measure, it is possible to generate ids with `qubic.createId()` and sign transactions with `qubic.createTransaction` in physically isolated computer or network. Calling these methods does not require a client connected to Qubic network.
+Signed transactions can be transported to a computer with internet connection and broadcasted with `client.broadcastTransaction`.
 Just make sure you calculate execution tick of transaction correctly to avoid walking back-and-forth.
+
+### Offline verification
+
+Relevant to IoT sector, lrv could verify records while being offline. Proofs can be generated via fetching data from classic internet, later communicated to IoT agents by other means (e.g.; nfc or ble transceivers).
 
 ---
 
