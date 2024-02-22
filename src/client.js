@@ -613,13 +613,13 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                                 system.epoch = epoch.epoch;
 
-                                                that.emit('epoch', {
+                                                that.emit('epoch', Object.freeze({
                                                     epoch: epoch.epoch,
-                                                    computorPublicKeys: epoch.computorPublicKeyStrings,
+                                                    computorPublicKeys: Object.freeze(epoch.computorPublicKeyStrings),
 
                                                     digest: digestBytesToString(epoch.digest),
                                                     signature: bytes64ToString(epoch.signature),
-                                                });
+                                                }));
                                             }
 
                                             if (quorumTickRequestingInterval === undefined && currentTickInfoRequestingInterval === undefined) {
