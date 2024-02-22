@@ -1,6 +1,7 @@
 # qubic-lrv (lite record verification)
 
 [![test](.github/badges/test.svg)](https://github.com/computor-tools/qubic-lrv/actions/workflows/test.yaml)
+[![Discord](https://img.shields.io/discord/768887649540243497)](https://discord.gg/qubic)
 
 Uses spectrum digest and 451 quorum ticks to verify records.
 Only `RESPOND_ENTITY` is supported now. Support for assets and contracts will be added later.
