@@ -50,7 +50,9 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
-import * as qubic from './src/client.js';
+import * as qubic from './src/lrv.js';
+
+import { App } from 'uWebSockets.js';
 
 const test = async function ({ seed, pingPongAmount }) {
     if (process.env.PUBLIC_PEERS === undefined) {
@@ -58,34 +60,35 @@ const test = async function ({ seed, pingPongAmount }) {
         process.exit(1);
     }
 
-    const client = qubic.createClient();
+    const lrv = qubic.lrv();
+    lrv.serve(App());
 
-    await client.subscribe({ id: qubic.ARBITRATOR }); // subscribe to arbitrary id
+    await lrv.subscribe({ id: qubic.ARBITRATOR }); // subscribe to arbitrary id
 
-    client.addListener('epoch', (epoch) => console.log('Epoch:', epoch.epoch));
-    client.addListener('tick', (tick) => console.log('\nTick  :', tick.tick, tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
-    client.addListener('entity', (entity) => {
+    lrv.addListener('epoch', (epoch) => console.log('Epoch:', epoch.epoch));
+    lrv.addListener('tick', (tick) => console.log('\nTick  :', tick.tick, tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
+    lrv.addListener('entity', (entity) => {
         if (entity.outgoingTransfer !== undefined) {
             console.log('Entity:', entity.tick, entity.spectrumDigest, entity.id, entity.energy, entity.outgoingTransfer.digest, entity.outgoingTransfer.tick, 'executed:', entity.outgoingTransfer.executed);
         } else {
             console.log('Entity:', entity.tick, entity.spectrumDigest, entity.id, entity.energy);
         }
     });
-    client.addListener('transfer', (transfer) => console.log('Transfer:', transfer));
-    client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
+    lrv.addListener('transfer', (transfer) => console.log('Transfer:', transfer));
+    lrv.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
 
-    client.addListener('error', (error) => console.log(error.message));
+    lrv.addListener('error', (error) => console.log(error.message));
 
-    client.connect((process.env.PUBLIC_PEERS).split(',').map(s => s.trim())); // start the loop by listening to networked messages
+    lrv.connect((process.env.PUBLIC_PEERS).split(',').map(s => s.trim())); // start the loop by listening to networked messages
 
     if (seed.length) {
         const privateKeys = [
             await qubic.createPrivateKey(seed, 0),
             await qubic.createPrivateKey(seed, 1),
         ];
-        const entity = await client.createEntity(privateKeys[0]); // creating an entity, autogenerates subscription by entity.id
+        const entity = await lrv.createEntity(privateKeys[0]); // creating an entity, autogenerates subscription by entity.id
 
-        const destinationId = (await client.createEntity(privateKeys[1])).id; // own destination
+        const destinationId = (await lrv.createEntity(privateKeys[1])).id; // own destination
 
         try {
             const transaction = await entity.createTransaction(

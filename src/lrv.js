@@ -1,14 +1,14 @@
 /*
 
-Permission is hereby granted, perpetual, worldwide, non-exclusive, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), 
-to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, 
+Permission is hereby granted, perpetual, worldwide, non-exclusive, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
 and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 
-  1. The Software cannot be used in any form or in any substantial portions for development, maintenance and for any other purposes, in the military sphere and in relation to military products, 
+  1. The Software cannot be used in any form or in any substantial portions for development, maintenance and for any other purposes, in the military sphere and in relation to military products,
   including, but not limited to:
 
-    a. any kind of armored force vehicles, missile weapons, warships, artillery weapons, air military vehicles (including military aircrafts, combat helicopters, military drones aircrafts), 
+    a. any kind of armored force vehicles, missile weapons, warships, artillery weapons, air military vehicles (including military aircrafts, combat helicopters, military drones aircrafts),
     air defense systems, rifle armaments, small arms, firearms and side arms, melee weapons, chemical weapons, weapons of mass destruction;
 
     b. any special software for development technical documentation for military purposes;
@@ -26,24 +26,24 @@ and to permit persons to whom the Software is furnished to do so, subject to the
     h. any auxiliary means related to abovementioned spheres and products.
 
 
-  2. The Software cannot be used as described herein in any connection to the military activities. A person, a company, or any other entity, which wants to use the Software, 
+  2. The Software cannot be used as described herein in any connection to the military activities. A person, a company, or any other entity, which wants to use the Software,
   shall take all reasonable actions to make sure that the purpose of use of the Software cannot be possibly connected to military purposes.
 
 
-  3. The Software cannot be used by a person, a company, or any other entity, activities of which are connected to military sphere in any means. If a person, a company, or any other entity, 
-  during the period of time for the usage of Software, would engage in activities, connected to military purposes, such person, company, or any other entity shall immediately stop the usage 
+  3. The Software cannot be used by a person, a company, or any other entity, activities of which are connected to military sphere in any means. If a person, a company, or any other entity,
+  during the period of time for the usage of Software, would engage in activities, connected to military purposes, such person, company, or any other entity shall immediately stop the usage
   of Software and any its modifications or alterations.
 
 
-  4. Abovementioned restrictions should apply to all modification, alteration, merge, and to other actions, related to the Software, regardless of how the Software was changed due to the 
+  4. Abovementioned restrictions should apply to all modification, alteration, merge, and to other actions, related to the Software, regardless of how the Software was changed due to the
   abovementioned actions.
 
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions, modifications and alterations of the Software.
 
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH 
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH
 THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 */
@@ -75,9 +75,11 @@ import {
     RESPOND_CURRENT_TICK_INFO,
     REQUEST_ENTITY,
     RESPOND_ENTITY,
-    createMessage,
+    createPacket,
     createTransceiver,
     MIN_NUMBER_OF_PUBLIC_PEERS,
+    REQUEST_RESPONSE_HEADER,
+    COMMUNICATION_PROTOCOLS,
 } from './transceiver.js';
 import {
     bytes64ToString,
@@ -96,6 +98,8 @@ import { createPrivateKey, createId, SEED_LENGTH } from './id.js';
 import { TRANSACTION, createTransaction, inspectTransaction } from './transaction.js';
 
 export {
+    MIN_NUMBER_OF_PUBLIC_PEERS,
+    COMMUNICATION_PROTOCOLS,
     ARBITRATOR,
     NUMBER_OF_COMPUTORS,
     QUORUM,
@@ -124,15 +128,20 @@ const inferEpoch = function() {
     return Math.floor(days / 7) + ((Math.floor(days % 7) === 0 && now.getUTCHours() < 12) ? 0 : 1);
 };
 
-export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH) {
+export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH) {
 
     return function () {
+        const startupTime = Date.now();
+
         const that = this;
+
+        const replyByDejavu = new Map();
+
         const epochs = new Map();
         const uniquePeersByEpoch = new Map();
         const ticks = new Map();
         const quorumTicks = new Map();
-        
+
         const voteFlagsByTick = new Map();
 
         const entities = new Map();
@@ -146,7 +155,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             initialTick: 0,
         };
 
-        const startupTime = Date.now();
+        let currentTickInfo;
 
         const tickHints = new Set();
 
@@ -162,16 +171,16 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
         let latestQuorumTickTimestamp;
 
         const requestComputors = function (peer) {
-            const message = createMessage(REQUEST_COMPUTORS.TYPE);
-            message.randomizeDezavu();
-            peer.transmit(message);
+            const request = createPacket(REQUEST_COMPUTORS.TYPE);
+            request.randomizeDejavu();
+            peer.transmit(request.transmissionBytes);
         };
 
         const requestCurrentTickInfo = function (peer) {
             peer.transmitToAll(function () {
-                const message = createMessage(REQUEST_CURRENT_TICK_INFO.TYPE);
-                message.randomizeDezavu();
-                return message;
+                const request = createPacket(REQUEST_CURRENT_TICK_INFO.TYPE);
+                request.randomizeDejavu();
+                return request.transmissionBytes;
             });
         };
 
@@ -183,27 +192,27 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             }
 
             peer.transmitToAll(function (peerIndex, numberOfPeers) {
-                const message = createMessage(REQUEST_QUORUM_TICK.TYPE);
-                message.randomizeDezavu();
-                message.setUint32(REQUEST_QUORUM_TICK.TICK_OFFSET, tickHint);
+                const request = createPacket(REQUEST_QUORUM_TICK.TYPE);
+                request.randomizeDejavu();
+                request.setUint32(REQUEST_QUORUM_TICK.TICK_OFFSET, tickHint);
 
                 const voteFlags = tickVoteFlags.slice();
                 for (let i = 0; i < NUMBER_OF_COMPUTORS; i++) {
-                    if (i < (peerIndex * Math.floor(NUMBER_OF_COMPUTORS / numberOfPeers)) && i > ((peerIndex + 1) * Math.floor(NUMBER_OF_COMPUTORS / numberOfPeers))) {
+                    if (!(i >= (peerIndex * Math.floor(NUMBER_OF_COMPUTORS / numberOfPeers)) && i <= ((peerIndex + 1) * Math.floor(NUMBER_OF_COMPUTORS / numberOfPeers)))) {
                         voteFlags[i >> 3] |= (1 << (i & 7));
                     }
                 }
 
-                message.set(voteFlags, REQUEST_QUORUM_TICK.VOTE_FLAGS_OFFSET);
-                return message;
+                request.set(voteFlags, REQUEST_QUORUM_TICK.VOTE_FLAGS_OFFSET);
+                return request.transmissionBytes;
             });
         };
 
         const requestEntity = function (peer, entity) {
-            const message = createMessage(REQUEST_ENTITY.TYPE);
-            message.set(entity.publicKey, REQUEST_ENTITY.PUBLIC_KEY_OFFSET);
-            message.randomizeDezavu();
-            peer.transmit(message);
+            const request = createPacket(REQUEST_ENTITY.TYPE);
+            request.randomizeDejavu();
+            request.set(entity.publicKey, REQUEST_ENTITY.PUBLIC_KEY_OFFSET);
+            peer.transmit(request.transmissionBytes);
         };
 
         const detectQuorumTick = async function (tick, nextQuorumTick) {
@@ -249,6 +258,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         if (storedTicks[i] !== undefined) {
                             if (!nextQuorumTick || await isPrevTick(storedTicks[i])) {
                                 const quorumComputorIndices = [storedTicks[i].computorIndex];
+                                let numberOfMisalignedVotes = 0;
 
                                 for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
                                     if (j !== i && storedTicks[j] !== undefined) {
@@ -265,7 +275,6 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                                 if (quorumComputorIndices.length === QUORUM) {
                                                     quorumTick = {
-                                                        computorIndices: Object.freeze(quorumComputorIndices),
                                                         tick: storedTicks[j].tick,
                                                         epoch: storedTicks[j].epoch,
 
@@ -279,6 +288,12 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                                         prevComputerDigest: digestBytesToString(storedTicks[j].prevComputerDigest),
 
                                                         transactionDigest: digestBytesToString(storedTicks[j].transactionDigest),
+
+                                                        numberOfAlignedVotes: QUORUM,
+                                                        numberOfMisalignedVotes,
+
+                                                        computorIndices: Object.freeze(quorumComputorIndices),
+                                                        packets: quorumComputorIndices.map(computorIndex => ({ computorIndex, packet: storedTicks[computorIndex].packet })),
                                                     };
 
                                                     if (quorumTicks.size === numberOfStoredTicks) {
@@ -294,7 +309,11 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                                     break;
                                                 }
+                                            } else {
+                                                numberOfMisalignedVotes++;
                                             }
+                                        } else {
+                                            numberOfMisalignedVotes++;
                                         }
                                     }
 
@@ -375,6 +394,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         computerDigest: nextQuorumTick.prevComputerDigest,
 
                         transactionDigest: quorumTick.transactionDigest,
+
+                        computorIndices: quorumTick.computorIndices,
                     }));
 
                     numberOfUpdatedEntities = 0;
@@ -458,16 +479,16 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             numberOfClearedTransactions++;
                                         }
                                     }
-        
+
                                     entity.incomingAmount = respondedEntity.incomingAmount;
                                     entity.outgoingAmount = respondedEntity.outgoingAmount;
                                     entity.energy = entity.incomingAmount - entity.outgoingAmount;
                                     entity.numberOfIncomingTransfers = respondedEntity.numberOfIncomingTransfers;
                                     entity.numberOfOutgoingTransfers = respondedEntity.numberOfOutgoingTransfers;
-        
+
                                     entity.latestIncomingTransferTick = respondedEntity.latestIncomingTransferTick;
                                     entity.latestOutgoingTransferTick = respondedEntity.latestOutgoingTransferTick;
-        
+
                                     entity.tick = quorumTick.tick,
                                     entity.epoch = quorumTick.epoch;
                                     entity.timestamp = quorumTick.timestamp;
@@ -490,19 +511,19 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                         numberOfOutgoingTransfers: entity.numberOfOutgoingTransfers,
                                         latestIncomingTransferTick: entity.latestIncomingTransferTick,
                                         latestOutgoingTransferTick: entity.latestOutgoingTransferTick,
-        
+
                                         tick: entity.tick,
                                         epoch: entity.epoch,
                                         timestamp: entity.timestamp,
-        
+
                                         digest: digestBytesToString(digest),
                                         siblings: entity.siblings,
                                         spectrumIndex: entity.spectrumIndex,
                                         spectrumDigest: entity.spectrumDigest,
-        
+
                                         ...(outgoingTransaction ?  { outgoingTransaction } : {}),
                                     }));
-        
+
                                     if ((entity.outgoingTransaction === undefined || entity.outgoingTransaction.tick <= system.tick) && entity.emitter) {
                                         entity.emitter.emit('execution_tick', system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
                                     }
@@ -526,7 +547,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             }
         };
 
-        const receiveCallback = async function (type, message, peer) {
+        const receiveCallback = async function (type, packet, message, peer) {
             switch (type) {
                 case EXCHANGE_PUBLIC_PEERS.TYPE:
                     requestComputors(peer);
@@ -545,11 +566,14 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                             signature: message.subarray(BROADCAST_COMPUTORS.SIGNATURE_OFFSET),
 
                             faultyComputorFlags: new Array(NUMBER_OF_COMPUTORS).fill(false),
+
+                            packet,
                         };
 
                         const inferredEpoch = inferEpoch();
 
                         if (receivedComputors.epoch <= inferredEpoch) {
+
                             await crypto.K12(message.subarray(BROADCAST_COMPUTORS.EPOCH_OFFSET, BROADCAST_COMPUTORS.SIGNATURE_OFFSET), receivedComputors.digest, crypto.DIGEST_LENGTH);
 
                             if (await crypto.verify(await ARBITRATOR_BYTES, receivedComputors.digest, receivedComputors.signature)) {
@@ -590,7 +614,10 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                             uniquePeersByEpoch.get(receivedComputors.epoch).add(peer.address);
 
                                             for (let i = system.epoch + 1; i <= inferredEpoch; i++) {
-                                                if (!epochs.has(i) || (uniquePeersByEpoch.get(i).size < (Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1))) {
+                                                if (!epochs.has(i) ||
+                                                    (peer.protocol === COMMUNICATION_PROTOCOLS.TCP && // TODO: remove after debugging
+                                                        uniquePeersByEpoch.get(i).size < (Math.floor((2 / 3) * MIN_NUMBER_OF_PUBLIC_PEERS) + 1))
+                                                ) {
                                                     tickLock.release();
                                                     return;
                                                 }
@@ -692,6 +719,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                             digest: new Uint8Array(crypto.DIGEST_LENGTH),
                             signature: message.subarray(BROADCAST_TICK.SIGNATURE_OFFSET, BROADCAST_TICK.SIGNATURE_OFFSET + crypto.SIGNATURE_LENGTH),
+
+                            packet,
                         };
 
                         await tickLock.acquire();
@@ -772,46 +801,140 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                     }
                     break;
 
+                case REQUEST_COMPUTORS.TYPE:
+                    if (peer.dejavu && ((peer.protocol === COMMUNICATION_PROTOCOLS.TCP && message.length === REQUEST_COMPUTORS.LENGTH) || (peer.protocol === COMMUNICATION_PROTOCOLS.WEBSOCKET && (message.length === REQUEST_COMPUTORS.LENGTH || message.length === REQUEST_COMPUTORS.LRV_LENGTH)))) {
+
+                        if (system.epoch > 0) {
+                            let epochOffset = (peer.protocol === COMMUNICATION_PROTOCOLS.WEBSOCKET && message.length === REQUEST_COMPUTORS.LRV_LENGTH) ? new DataView(message.buffer, message.byteOffset).getUint16(REQUEST_COMPUTORS.LRV_EPOCH_OFFSET, true) : system.epoch - 1;
+
+                            if (epochOffset < system.epoch) {
+                                while (epochOffset < system.epoch) {
+                                    const response = epochs.get(++epochOffset)?.packet?.slice();
+
+                                    if (response) {
+                                        new DataView(response.buffer, response.byteOffset).setUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, peer.dejavu, true);
+                                        peer.reply(response);
+                                        peer.reply(response);
+                                    }
+                                }
+                            } else {
+                                peer.ignore();
+                            }
+                        }
+                    } else {
+                        peer.ignore();
+                    }
+                    break;
+
+                case REQUEST_QUORUM_TICK.TYPE:
+                    if (peer.dejavu && message.length === REQUEST_QUORUM_TICK.LENGTH) {
+                        const requestedTick = new DataView(message.buffer, message.byteOffset).getUint32(REQUEST_QUORUM_TICK.TICK_OFFSET, true);
+                        const voteFlags = message.subarray(REQUEST_QUORUM_TICK.VOTE_FLAGS_OFFSET, REQUEST_QUORUM_TICK.VOTE_FLAGS_OFFSET + REQUEST_QUORUM_TICK.VOTE_FLAGS_LENGTH);
+
+                        if (quorumTicks.has(requestedTick)) {
+                            for (const { computorIndex, packet } of quorumTicks.get(requestedTick).packets) {
+                                if (!(voteFlags[computorIndex >> 3] & (1 << (computorIndex & 7)))) {
+                                    new DataView(packet.buffer, packet.byteOffset).setUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, peer.dejavu, true);
+                                    peer.reply(packet);
+                                }
+                            }
+                        }
+                    } else {
+                        peer.ignore();
+                    }
+                    break;
+
+                case BROADCAST_TRANSACTION:
+                    if (peer.dejavu === 0 && message.length >= BROADCAST_TRANSACTION.MIN_LENGTH && message.length <= BROADCAST_TRANSACTION.MAX_LENGTH) {
+                        const transactionView = new DataView(message.buffer, message.byteOffset);
+                        const inputSize = transactionView.getUint16(TRANSACTION.INPUT_SIZE_OFFSET, true);
+
+                        if (message.length === inputSize + crypto.SIGNATURE_LENGTH + BROADCAST_TRANSACTION.MIN_LENGTH) {
+                            const digest = new Uint8Array(crypto.DIGEST_LENGTH);
+                            const signature = message.subarray(TRANSACTION.INPUT_OFFSET + inputSize, TRANSACTION.length(inputSize));
+
+                            await crypto.K12(message.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
+
+                            if (await crypto.verify(message.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET,  TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH), digest, signature)) {
+                                peer.broadcast(packet);
+                            } else {
+                                peer.ignore();
+                            }
+                        } else {
+                            peer.ignore();
+                        }
+                    } else {
+                        peer.ignore();
+                    }
+                    break;
+
+                case REQUEST_CURRENT_TICK_INFO.TYPE:
+                    if (peer.dejavu && message.length === REQUEST_CURRENT_TICK_INFO.LENGTH) {
+                        if (currentTickInfo) {
+                            const response = currentTickInfo.slice();
+                            new DataView(response.buffer, response.byteOffset).setUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, peer.dejavu, true);
+                            peer.reply(response);
+                        }
+                    } else {
+                        peer.ignore();
+                    }
+                    break;
+
                 case RESPOND_CURRENT_TICK_INFO.TYPE:
                     if (message.length === RESPOND_CURRENT_TICK_INFO.LENGTH) {
                         const messageView = new DataView(message.buffer, message.byteOffset);
-                        const tickHint = messageView.getUint32(RESPOND_CURRENT_TICK_INFO.TICK_OFFSET, true);
 
-                        if (tickHint > system.tick) {
+                        const info = {
+                            epoch: messageView.getUint16(RESPOND_CURRENT_TICK_INFO.EPOCH_OFFSET, true),
+                            tick: messageView.getUint32(RESPOND_CURRENT_TICK_INFO.TICK_OFFSET, true),
+                        };
+
+
+                        if (info.epoch === system.epoch && info.tick > system.tick) {
+                            const currentTickInfoPacket = createPacket(RESPOND_CURRENT_TICK_INFO.TYPE);
+                            currentTickInfoPacket.set(message, 0);
+                            currentTickInfo = currentTickInfoPacket.transmissionBytes;
+
                             entities.forEach(function (entity) {
                                 requestEntity(peer, entity);
                             });
 
                             clearInterval(currentTickInfoRequestingInterval);
                             currentTickInfoRequestingInterval = undefined;
-                            if (!tickHints.has(tickHint)) {
-                                tickHints.add(tickHint);
+                            if (!tickHints.has(info.tick)) {
+                                tickHints.add(info.tick);
 
-                                requestQuorumTick(peer, tickHint);
-                                requestQuorumTick(peer, tickHint + 1);
+                                requestQuorumTick(peer, info.tick);
+                                requestQuorumTick(peer, info.tick + 1);
 
-                                clearInterval(quorumTickRequestingInterval);
-                                quorumTickRequestingInterval = setInterval(async () => {
-                                    await tickLock.acquire();
-                                    let tick = tickHint > system.tick ? tickHint - 1 : system.tick + 1;
-                                    if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
-                                        requestQuorumTick(peer, tick);
-                                    }
-                                    if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
-                                        requestQuorumTick(peer, tick + 1);
-                                    }
-
-                                    if ((ticks.get(tick) || []).filter(t => t !== undefined).length >= QUORUM) {
-                                        tick += 2;
+                                    clearInterval(quorumTickRequestingInterval);
+                                    quorumTickRequestingInterval = setInterval(async () => {
+                                        await tickLock.acquire();
+                                        let tick = info.tick > system.tick ? info.tick - 1 : system.tick + 1;
                                         if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
                                             requestQuorumTick(peer, tick);
                                         }
                                         if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
                                             requestQuorumTick(peer, tick + 1);
                                         }
-                                    }
-                                    tickLock.release();
-                                }, TARGET_TICK_DURATION);
+
+                                        if ((ticks.get(tick) || []).filter(t => t !== undefined).length >= QUORUM) {
+                                            tick += 2;
+                                            if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
+                                                requestQuorumTick(peer, tick);
+                                            }
+                                            if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
+                                                requestQuorumTick(peer, tick + 1);
+                                            }
+                                        }
+                                        tickLock.release();
+                                    }, TARGET_TICK_DURATION);
+                            }
+
+                            if (IS_BROWSER) {
+                                if (currentTickInfoRequestingInterval === undefined) {
+                                    currentTickInfoRequestingInterval = setInterval(() => requestCurrentTickInfo(peer), TARGET_TICK_DURATION);
+                                }
                             }
                         } else {
                             if (currentTickInfoRequestingInterval === undefined) {
@@ -820,9 +943,31 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         }
                     }
                     break;
-                
+
+                case REQUEST_ENTITY.TYPE:
+                    if (peer.dejavu && message.length === REQUEST_ENTITY.LENGTH) {
+                        const dejavu = peer.dejavu;
+                        replyByDejavu.set(dejavu, peer.reply);
+
+                        const request = createPacket(REQUEST_ENTITY.TYPE);
+                        request.setDejavu(dejavu);
+                        request.set(message.slice(REQUEST_ENTITY.PUBLIC_KEY_OFFSET, REQUEST_ENTITY.PUBLIC_KEY_LENGTH), REQUEST_ENTITY.PUBLIC_KEY_OFFSET);
+
+                        peer.transmitToRandom(request.transmissionBytes);
+
+                        setTimeout(() => replyByDejavu.delete(dejavu), averageQuorumTickProcessingDuration * 3);
+                    }
+                    break;
+
                 case RESPOND_ENTITY.TYPE:
                     if (message.length === RESPOND_ENTITY.LENGTH) {
+                        const dejavu = new DataView(packet.buffer, packet.byteOffset).getUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, true);
+                        if (dejavu && replyByDejavu.has(dejavu)) {
+                            replyByDejavu.get(dejavu)?.(packet);
+                            replyByDejavu.delete(dejavu);
+                            return;
+                        }
+
                         const messageView = new DataView(message.buffer, message.byteOffset);
                         const respondedEntity = {
                             id: await bytesToId(message.subarray(RESPOND_ENTITY.PUBLIC_KEY_OFFSET, RESPOND_ENTITY.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH)),
@@ -867,18 +1012,22 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
         };
 
         const transceiver = createTransceiver(receiveCallback);
+        const webSocketServer = IS_BROWSER ? {} : {
+            serve: transceiver.serve,
+        };
 
         const _broadcastTransaction = function (transactionBytes) {
-            const message = createMessage(BROADCAST_TRANSACTION.TYPE, transactionBytes.length);
-            message.set(transactionBytes, 0);
+            const packet = createPacket(BROADCAST_TRANSACTION.TYPE, transactionBytes.length);
+            packet.set(transactionBytes, 0);
 
             for (let i = 0; i <= TICK_TRANSACTIONS_PUBLICATION_OFFSET; i++) {
-                setTimeout(() => transceiver.transmit(message), i * TARGET_TICK_DURATION);
+                setTimeout(() => transceiver.transmit(packet.transmissionBytes), i * TARGET_TICK_DURATION);
             }
         }
 
         return Object.assign(
             this,
+            webSocketServer,
             {
                 connect(options) {
                     transceiver.connect(options);

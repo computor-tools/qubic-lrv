@@ -51,7 +51,7 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 'use strict'
 
 import { exec } from 'node:child_process';
-import * as qubic from './src/client.js';
+import * as qubic from './src/lrv.js';
 
 const test = async function ({ pingPongAmount }) {
     if (process.env.PEERS === undefined) {
@@ -68,16 +68,16 @@ const test = async function ({ pingPongAmount }) {
         tick: 0,
     };
 
-    const client = qubic.createClient();
+    const lrv = qubic.lrv();
 
-    client.addListener('epoch', (epoch) => console.log('Epoch:', (system.epoch = epoch.epoch)));
+    lrv.addListener('epoch', (epoch) => console.log('Epoch:', (system.epoch = epoch.epoch)));
 
-    client.addListener('tick', (tick) => console.log('\nTick  :', (system.tick = tick.tick), tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
-    client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
+    lrv.addListener('tick', (tick) => console.log('\nTick  :', (system.tick = tick.tick), tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
+    lrv.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
 
-    client.addListener('error', (error) => console.log(error));
+    lrv.addListener('error', (error) => console.log(error));
 
-    client.connect((process.env.PEERS).split(',').map(s => s.trim())); // start the loop by listening to networked messages
+    lrv.connect((process.env.PEERS).split(',').map(s => s.trim())); // start the loop by listening to networked messages
 
     if (process.env.SEED?.length) {
         let transaction;
@@ -87,10 +87,10 @@ const test = async function ({ pingPongAmount }) {
             Bob: await qubic.createPrivateKey(process.env.SEED, 1),
         };
 
-        const Alice = await client.createEntity(privateKeys.Alice);
-        const Bob = await client.createEntity(privateKeys.Bob);
+        const Alice = await lrv.createEntity(privateKeys.Alice);
+        const Bob = await lrv.createEntity(privateKeys.Bob);
 
-        client.addListener('transfer', async function (transfer) {
+        lrv.addListener('transfer', async function (transfer) {
             console.log('Transfer:', transfer);
 
             if (transfer.executed) {
@@ -122,7 +122,7 @@ const test = async function ({ pingPongAmount }) {
             }
         });
 
-        client.addListener('entity', async function (entity) {
+        lrv.addListener('entity', async function (entity) {
             console.log('Entity:', entity.tick, entity.spectrumDigest, entity.id, entity.energy);
 
             if (transaction === undefined) {

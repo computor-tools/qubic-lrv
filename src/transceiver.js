@@ -51,10 +51,16 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 'use strict'
 
 import crypto from 'qubic-crypto';
-import { NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH } from './constants.js';
+import { NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH, TARGET_TICK_DURATION } from './constants.js';
 import { TRANSACTION } from './transaction.js';
+import { IS_BROWSER } from './utils.js';
+
+import pkg from '../package.json' assert { type: 'json' };
 
 const CORE_PORT = 21841;
+const PROXY_PORT = 22841;
+
+const DEJAVU_SWAP_LIMIT = 1000000;
 
 export const MIN_NUMBER_OF_PUBLIC_PEERS = 4;
 export const MAX_NUMBER_OF_PUBLIC_PEERS = 1024;
@@ -62,7 +68,7 @@ export const PEER_ROTATION_PERIOD = 2 * 60 * 1000;
 
 export const COMMUNICATION_PROTOCOLS = {
     TCP: 'tcp',
-    // WEB_SOCKETS: 'ws',
+    WEBSOCKET: 'ws',
     // WEBRTC: 'webrtc',
     get DEFAULT() {
         return this.TCP;
@@ -235,6 +241,12 @@ export const BROADCAST_TICK = {
 export const REQUEST_COMPUTORS = {
     TYPE: 11,
     LENGTH: 0,
+
+    LRV_EPOCH_OFFSET: 0,
+    LRV_EPOCH_LENGTH: BROADCAST_COMPUTORS.EPOCH_LENGTH,
+    get LRV_LENGTH() {
+        return this.LRV_EPOCH_OFFSET + this.LRV_EPOCH_LENGTH;
+    },
 };
 
 export const REQUEST_QUORUM_TICK = {
@@ -648,11 +660,11 @@ export const NETWORK_MESSAGES = {
     [RESPOND_CONTRACT_FUNCTION.TYPE]: RESPOND_CONTRACT_FUNCTION, 
 };
 
-const messageSize = function (message) {
-    return (message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET] | message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 1] << 8 | message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 2] << 16) & 0xFFFFFF;
+const packetSize = function (packet) {
+    return (packet[REQUEST_RESPONSE_HEADER.SIZE_OFFSET] | packet[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 1] << 8 | packet[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 2] << 16) & 0xFFFFFF;
 };
 
-export const createMessage = function (type, contentSize) {
+export const createPacket = function (type, contentSize) {
     if (contentSize) {
         const MAX_LENGTH = NETWORK_MESSAGES[type].MAX_LENGTH || NETWORK_MESSAGES[type].LENGTH;
         if (REQUEST_RESPONSE_HEADER.LENGTH + contentSize > MAX_LENGTH) {
@@ -660,50 +672,54 @@ export const createMessage = function (type, contentSize) {
         }
     }
 
-    const message = new Uint8Array(contentSize ? REQUEST_RESPONSE_HEADER.LENGTH + contentSize : REQUEST_RESPONSE_HEADER.LENGTH + NETWORK_MESSAGES[type].LENGTH);
-    const messageView = new DataView(message.buffer, message.byteOffset);
+    const packet = new Uint8Array(contentSize ? REQUEST_RESPONSE_HEADER.LENGTH + contentSize : REQUEST_RESPONSE_HEADER.LENGTH + NETWORK_MESSAGES[type].LENGTH);
+    const packetView = new DataView(packet.buffer, packet.byteOffset);
   
-    message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET] = message.byteLength;
-    message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 1] = message.byteLength >> 8;
-    message[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 2] = message.byteLength >> 16;
+    packet[REQUEST_RESPONSE_HEADER.SIZE_OFFSET] = packet.byteLength;
+    packet[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 1] = packet.byteLength >> 8;
+    packet[REQUEST_RESPONSE_HEADER.SIZE_OFFSET + 2] = packet.byteLength >> 16;
 
-    message[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] = type;
+    packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] = type;
 
     return {
         get size() {
-            return message.byteLength;
+            return packet.byteLength;
         },
         get type() {
             return type;
         },
         get dejavu() {
-            return messageView.getUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, true);
+            return packetView.getUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, true);
         },
-        transmissionBytes: message,
-        randomizeDezavu() {
-            message.set(globalThis.crypto.getRandomValues(new Uint8Array(REQUEST_RESPONSE_HEADER.DEJAVU_LENGTH)), REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET);
+        transmissionBytes: packet,
+        randomizeDejavu() {
+            packet.set(globalThis.crypto.getRandomValues(new Uint8Array(REQUEST_RESPONSE_HEADER.DEJAVU_LENGTH)), REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET);
             return this.dejavu;
         },
         zeroDejavu() {
-          for (let i = 0; i < REQUEST_RESPONSE_HEADER.DEJAVU_LENGTH; i++) {
-                message[REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET + i] = 0;
+            for (let i = 0; i < REQUEST_RESPONSE_HEADER.DEJAVU_LENGTH; i++) {
+                packet[REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET + i] = 0;
             }
-            return this.dejavu;
+            return 0;
         },
-        set(array, offset) {
-            message.set(array.slice(), REQUEST_RESPONSE_HEADER.LENGTH + offset);
+        setDejavu(dejavu) {
+            packetView.setUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, dejavu, true);
+            return dejavu;
+        },
+        set(array, offset = 0) {
+            packet.set(array.slice(), REQUEST_RESPONSE_HEADER.LENGTH + offset);
         },
         setUint8(offset, value) {
-            message[REQUEST_RESPONSE_HEADER.LENGTH + offset] = value;
+            packet[REQUEST_RESPONSE_HEADER.LENGTH + offset] = value;
         },
         setUint16(offset, value) {
-            messageView.setUint16(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
+            packetView.setUint16(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
         },
         setUint32(offset, value) {
-            messageView.setUint32(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
+            packetView.setUint32(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
         },
         setBigUint64(offset, value) {
-            messageView.setBigUint64(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
+            packetView.setBigUint64(REQUEST_RESPONSE_HEADER.LENGTH + offset, value, true);
         },
     };
 };
@@ -711,9 +727,11 @@ export const createMessage = function (type, contentSize) {
 export const createTransceiver = function (receiveCallback) {
     const publicPeers = {
         [COMMUNICATION_PROTOCOLS.TCP]: [],
+        [COMMUNICATION_PROTOCOLS.WEBSOCKET]: [],
     };
     const peers = {
         [COMMUNICATION_PROTOCOLS.TCP]: [],
+        [COMMUNICATION_PROTOCOLS.WEBSOCKET]: [],
     };
     const ignoredPeers = new Set();
     const initialPeers = new Set();
@@ -737,7 +755,7 @@ export const createTransceiver = function (receiveCallback) {
         }
     };
 
-    const _receiveCallback = function (type, message, peer) {
+    const _receiveCallback = function (type, packet, message, peer) {
         switch (peer.protocol) {
             case COMMUNICATION_PROTOCOLS.TCP:
                 switch (type) {
@@ -746,7 +764,7 @@ export const createTransceiver = function (receiveCallback) {
                             initialHandshakingPeers.add(peer.address);
 
                             if (!initialHandshakesDone) {
-                                initiallyExchangedPeers.push({ message, peer });
+                                initiallyExchangedPeers.push({ packet, message, peer });
                             } else {
                                 setPublicPeers(message, peer);
                             }
@@ -756,20 +774,24 @@ export const createTransceiver = function (receiveCallback) {
                 break;
         }
 
-        if (!initialHandshakesDone) {
-            if (type === EXCHANGE_PUBLIC_PEERS.TYPE) {
-                if (initialHandshakingPeers.size === MIN_NUMBER_OF_PUBLIC_PEERS) {
-                    if (typeof receiveCallback === 'function') {
-                        for (let i = 0; i < initiallyExchangedPeers.length; i++) {
-                            receiveCallback(EXCHANGE_PUBLIC_PEERS.TYPE, initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
-                            setPublicPeers(initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
+        if (peer.protocol === COMMUNICATION_PROTOCOLS.WEBSOCKET) {
+            receiveCallback(type, packet, message, peer);
+        } else {
+            if (!initialHandshakesDone) {
+                if (type === EXCHANGE_PUBLIC_PEERS.TYPE) {
+                    if (initialHandshakingPeers.size === MIN_NUMBER_OF_PUBLIC_PEERS) {
+                        if (typeof receiveCallback === 'function') {
+                            for (let i = 0; i < initiallyExchangedPeers.length; i++) {
+                                receiveCallback(EXCHANGE_PUBLIC_PEERS.TYPE, initiallyExchangedPeers[i].packet, initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
+                                setPublicPeers(initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
+                            }
                         }
+                        initialHandshakesDone = true;
                     }
-                    initialHandshakesDone = true;
                 }
+            } else if (typeof receiveCallback === 'function') {
+                receiveCallback(type, packet, message, peer);
             }
-        } else if (typeof receiveCallback === 'function') {
-            receiveCallback(type, message, peer);
         }
     };
 
@@ -778,34 +800,41 @@ export const createTransceiver = function (receiveCallback) {
         let rotationTimeout;
         let shouldReconnect = true;
 
-        const transmit = function (message) {
+        const transmit = function (packet) {
             switch (protocol) {
                 case COMMUNICATION_PROTOCOLS.TCP:
                     if (socket !== undefined && socket.readyState === 'open') {
-                        socket.write(message.transmissionBytes);
+                        socket.write(packet);
+                    }
+                    break;
+
+                case COMMUNICATION_PROTOCOLS.WEBSOCKET:
+                    if (socket !== undefined && socket.readyState < 2) {
+                        socket.send(packet);
                     }
                     break;
             }
         };
 
-        const transmitToOthers = function (message) {
+        const transmitToOthers = function (packet) {
             for (let anotherProtocol in peers) {
                 if (peers.hasOwnProperty(anotherProtocol)) {
                     for (const anotherPeer of peers[anotherProtocol]) {
                         if (anotherPeer.address !== address) {
-                            anotherPeer.transmit(message);
+                            anotherPeer.transmit(packet);
                         }
                     }
                 }
             }
         };
 
-        const transmitToAll = function (message) {
+        const transmitToAll = function (packet) {
             for (let anotherProtocol in peers) {
                 if (peers.hasOwnProperty(anotherProtocol)) {
                     const connectedPeers = peers[protocol].filter(anotherPeer => anotherPeer.readyState() === 'open');
+
                     for (let i = 0; i < connectedPeers.length; i++) {
-                        connectedPeers[i].transmit(typeof message === 'function' ? message.call({}, i, connectedPeers.length) : message);
+                        connectedPeers[i].transmit(typeof packet === 'function' ? packet.call({}, i, connectedPeers.length) : packet);
                     }
                 }
             }
@@ -821,13 +850,29 @@ export const createTransceiver = function (receiveCallback) {
                         socket.destroy();
                     }
                     break;
+
+                case COMMUNICATION_PROTOCOLS.WEBSOCKET:
+                    if (socket !== undefined && socket.readyState < 2) {
+                        socket.close();
+                    }
+                    break;
             }
         };
 
         const connect = function () {
-            if (socket.destroyed) {
-                if (!ignoredPeers.has(address)) {
-                    publicPeers[protocol].push(address);
+            if ((protocol === COMMUNICATION_PROTOCOLS.TCP && socket.destroyed) || (protocol === COMMUNICATION_PROTOCOLS.WEBSOCKET && socket.readyState > 1)) {
+                switch (protocol) {
+                    case COMMUNICATION_PROTOCOLS.TCP:
+                        if (!ignoredPeers.has(address)) {
+                            publicPeers[protocol].push(address);
+                        }
+                        break;
+
+                    case COMMUNICATION_PROTOCOLS.WEBSOCKET:
+                        if (!ignoredPeers.has(new URL(socket.url).hostname)) {
+                            publicPeers[protocol].push(address);
+                        }
+                        break;
                 }
 
                 const anotherAddress = publicPeers[protocol].splice(Math.floor(Math.random() * publicPeers[protocol].length), 1)[0];
@@ -857,6 +902,11 @@ export const createTransceiver = function (receiveCallback) {
                     ignoredPeers.add(socket.address);
                     socket.destroy();
                     break;
+
+                case COMMUNICATION_PROTOCOLS.WEBSOCKET:
+                    ignoredPeers.add(new URL(socket.url).hostname);
+                    socket.close();
+                    break;
             }
         };
 
@@ -881,6 +931,13 @@ export const createTransceiver = function (receiveCallback) {
                         if (socket !== undefined) {
                             return socket.readyState;
                         }
+                        break;
+
+                    case COMMUNICATION_PROTOCOLS.WEBSOCKET:
+                        if (socket !== undefined) {
+                            return socket.readyState === 1 ? 'open' : socket.readyState;
+                        }
+                        break;
                 }
             },
             transmit,
@@ -930,9 +987,10 @@ export const createTransceiver = function (receiveCallback) {
                         let remainingBytes = buffer.byteLength;
                     
                         while (remainingBytes > 0) {
-                            const size = messageSize(buffer);
+                            const size = packetSize(buffer);
                             if (size <= remainingBytes) {
-                                _receiveCallback(buffer[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], buffer.slice(REQUEST_RESPONSE_HEADER.LENGTH, size), _peer);
+                                const packet = new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + size));
+                                _receiveCallback(packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], packet, packet.subarray(REQUEST_RESPONSE_HEADER.LENGTH, size), _peer);
                                 buffer = buffer.slice(size);
                             } else {
                                 break;
@@ -949,10 +1007,143 @@ export const createTransceiver = function (receiveCallback) {
                 socket.on('error', function () {});
 
                 break;
+
+            case COMMUNICATION_PROTOCOLS.WEBSOCKET:
+                if (IS_BROWSER) {
+                    socket = new WebSocket(`ws://${address}:${port}`);
+                    socket.binaryType = 'arraybuffer';
+
+                    socket.addEventListener('open', function () {});
+
+                    socket.addEventListener('message', function (event) {
+                        const packet = new Uint8Array(event.data);
+                        _peer.dejavu = new DataView(packet.buffer, packet.byteOffset).getUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, true);
+
+                        _receiveCallback(packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], packet, packet.slice(REQUEST_RESPONSE_HEADER.LENGTH), _peer);
+                    });
+
+                    socket.addEventListener('close', function () {
+                        _replace();
+                    });
+
+                    socket.addEventListener('error', function () {});
+                }
+
+                break;
         }
     };
 
-    return {
+    const webSocketServer = IS_BROWSER ? {} : {
+        async serve(server, options) {
+            const saltBytes = new Uint32Array(2);
+            (await import('node:crypto')).getRandomValues(saltBytes);
+            const salt = new DataView(saltBytes.buffer, saltBytes.byteOffset).getUint32(saltBytes);
+
+            const dejavu01 = [new BigUint64Array(536870912), new BigUint64Array(536870912)];
+            let dejavuSwap = 0;
+            let dejavuSwapCounter = DEJAVU_SWAP_LIMIT;
+
+            const port = options?.port || PROXY_PORT;
+
+            const broadcast = function (packet) {
+                for (let i = 0; i < peers[COMMUNICATION_PROTOCOLS.TCP].length; i++) {
+                    if (peers[COMMUNICATION_PROTOCOLS.TCP][i].readyState() !== 'open') {
+                        peers[COMMUNICATION_PROTOCOLS.TCP][i].transmit(packet);
+                    }
+                }
+            };
+
+            const transmitToRandom = function (packet) {
+                let peer;
+                while (peer?.readyState() !== 'open') {
+                    peer = peers[COMMUNICATION_PROTOCOLS.TCP][Math.floor(Math.random() * peers[COMMUNICATION_PROTOCOLS.TCP].length)];
+                }
+                peer.transmit(packet);
+            };
+
+            return server
+                .ws(options?.route || '/*', {
+                    idleTimeout: options?.idleTimeout || 32,
+                    maxBackpressure: options?.maxBackpressure || REQUEST_RESPONSE_HEADER.MAX_SIZE * 451 * 4,
+                    maxPayloadLength: REQUEST_RESPONSE_HEADER.MAX_SIZE,
+
+                    open: (socket) => {
+                        _receiveCallback(REQUEST_COMPUTORS.TYPE, undefined, new Uint8Array(0), {
+                            protocol: COMMUNICATION_PROTOCOLS.WEBSOCKET,
+                            dejavu: 1,
+                            reply(response) {
+                                socket.send(response, true);
+                            },
+                        });
+                    },
+
+                    message: async (socket, message, isBinary) => {
+                        const packet = new Uint8Array(message);
+
+                        if (isBinary && (
+                            packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === REQUEST_COMPUTORS.TYPE ||
+                            packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === REQUEST_QUORUM_TICK.TYPE ||
+                            packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === BROADCAST_TRANSACTION.TYPE ||
+                            packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === REQUEST_CURRENT_TICK_INFO.TYPE ||
+                            packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET] === REQUEST_ENTITY.TYPE
+                        )) {
+                            const packetView = new DataView(packet.buffer, packet.byteOffset);
+                            const dejavu = packetView.getUint32(REQUEST_RESPONSE_HEADER.DEJAVU_OFFSET, true);
+
+                            if (dejavu !== 0) {
+                                const input = packet.slice(0, packetView.getUint32(0, true) & 0xFFFFFF);
+                                new DataView(input.buffer, input.byteOffset).setUint32(0, salt, true);
+                                const saltedIdBytes = new Uint8Array(4);
+
+                                await crypto.K12(input, saltedIdBytes, saltedIdBytes.byteLength);
+
+                                const saltedIdView = new DataView(saltedIdBytes.buffer, saltedIdBytes.byteOffset);
+                                const saltedId = saltedIdView.getUint32(0, true);
+                                saltedIdView.setUint32(0, saltedId >> 6, true);
+                                const index = saltedIdView.getUint32(0, true);
+
+                                const dejavu0View = new DataView(dejavu01[0 ^ dejavuSwap].buffer, dejavu01[0 ^ dejavuSwap].byteOffset);
+                                const dejavu1View = new DataView(dejavu01[1 ^ dejavuSwap].buffer, dejavu01[1 ^ dejavuSwap].byteOffset);
+
+                                if (!((dejavu0View.getBigUint64(index, true) | dejavu1View.getBigUint64(index, true)) & BigInt(1n << BigInt(saltedId & 63)))) {
+                                    dejavu0View.setBigUint64(index, dejavu0View.getBigUint64(index) | (1n << BigInt(saltedId & 63)), true);
+                                    if (!(--dejavuSwapCounter)) {
+                                        dejavu01[0 ^ dejavuSwap].fill(0n);
+                                        dejavuSwap ^= 1;
+                                        dejavuSwapCounter = DEJAVU_SWAP_LIMIT;
+                                    }
+                                } else {
+                                    return;
+                                }
+                            }
+
+                            _receiveCallback(packet[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], packet, packet.slice(REQUEST_RESPONSE_HEADER.LENGTH), {
+                                protocol: COMMUNICATION_PROTOCOLS.WEBSOCKET,
+                                dejavu,
+                                reply(response) {
+                                    socket.send(response, true);
+                                },
+                                transmitToRandom,
+                                broadcast,
+                                ignore: socket.close,
+                            });
+                        } else {
+                            socket.close();
+                        }
+                    },
+                })
+                .get(options?.route || '/*', (response) => {
+                    response.writeStatus('200 OK').end(`qubic-lrv server v${pkg.version}. DO NOT accept data directly from this server! Use a client that verifies records.`);
+                })
+                .listen(port, (listenSocket) => {
+                    if (listenSocket) {
+                        console.log(`WebSocket server listening to port ${port}`);
+                    }
+                });
+        }
+    };
+
+    return Object.assign(webSocketServer, {
         get numberOfPeers() {
             return numberOfPeers;
         },
@@ -962,9 +1153,11 @@ export const createTransceiver = function (receiveCallback) {
                     for (const peer of peers[COMMUNICATION_PROTOCOLS.TCP]) {
                         peer.connect();
                     }
+                    for (const peer of peers[COMMUNICATION_PROTOCOLS.WEBSOCKET]) {
+                        peer.connect();
+                    }
                 }
             }
-
 
             for (let i = 0; i < options.length; i++) {
                 if (typeof options[i] === 'string') {
@@ -981,7 +1174,9 @@ export const createTransceiver = function (receiveCallback) {
                 uniqueAddresses.add(options[i].address);
             }
 
-            if (numberOfPeers + uniqueAddresses.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
+            if ((peers[0] && peers[0].protocol !== COMMUNICATION_PROTOCOLS.WEBSOCKET) && // TODO: remove after debugging
+                (numberOfPeers + uniqueAddresses.size < MIN_NUMBER_OF_PUBLIC_PEERS)
+            ) {
                 throw new Error('Insuffient number of peers');
             }
 
@@ -1004,7 +1199,7 @@ export const createTransceiver = function (receiveCallback) {
                 }
         
                 if (options[i].port === undefined) {
-                    options[i].port = CORE_PORT;
+                    options[i].port = options[i].protocol === COMMUNICATION_PROTOCOLS.TCP ? CORE_PORT : PROXY_PORT;
                 }
 
                 if (options[i].rotationPeriod === undefined) {
@@ -1053,15 +1248,15 @@ export const createTransceiver = function (receiveCallback) {
             numberOfPeers = 0;
             this.connect(options);
         },
-        transmit(message) {
+        transmit(packet) {
             for (let protocol in peers) {
                 if (peers.hasOwnProperty(protocol)) {
                     publicPeers[protocol] = [];
                     for (const peer of peers[protocol]) {
-                        peer.transmit(message);
+                        peer.transmit(packet);
                     }
                 }
             }
         },
-    }
+    });
 };
