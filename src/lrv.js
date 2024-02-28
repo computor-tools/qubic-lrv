@@ -658,8 +658,10 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                             }
                                         }
                                     } else {
-                                        system.epoch = 0x10000;
-                                        that.emit('error', new Error('Replace arbitrator.'));
+                                        if (receivedComputors.computorPublicKeys.reduce((acc, computorPublicKey) => isZero(computorPublicKey) ? ++acc : acc, 0) !== NUMBER_OF_COMPUTORS) {
+                                            system.epoch = 0x10000;
+                                            that.emit('error', new Error('Replace arbitrator.'));
+                                        }
                                     }
                                 } else {
                                     if (receivedComputors.epoch > system.epoch) {
