@@ -343,7 +343,15 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
             const quorumTick = await detectQuorumTick(tick - 1, nextQuorumTick);
 
             if (quorumTick && nextQuorumTick) {
+                const prevTick = system.tick;
+
                 if (system.tick < quorumTick.tick) {
+                    system.tick = quorumTick.tick;
+
+                    if (system.initialTick === 0) {
+                        system.initialTick = system.tick;
+                    }
+
                     if (currentTickInfoRequestingInterval === undefined) {
                         requestCurrentTickInfo(peer);
                         currentTickInfoRequestingInterval = setInterval(() => requestCurrentTickInfo(peer), TARGET_TICK_DURATION);
@@ -358,9 +366,9 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
 
                     const now = Date.now();
 
-                    if (system.tick > 0) {
+                    if (prevTick > 0) {
                         const stats = Object.freeze({
-                            tick: system.tick,
+                            tick: prevTick,
                             duration: now - (latestQuorumTickTimestamp || startupTime),
                             numberOfSkippedTicks: numberOfSkippedTicks === undefined ? system.initialTick - 1 : numberOfSkippedTicks,
                             numberOfUpdatedEntities,
@@ -368,19 +376,13 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                             numberOfClearedTransactions,
                         });
 
-                        numberOfSkippedTicks = (quorumTick.tick - 1) - system.tick;
+                        numberOfSkippedTicks = (quorumTick.tick - 1) - prevTick;
 
                         that.emit('tick_stats', stats);
                     }
 
                     latestQuorumTickTimestamp = now;
                     averageQuorumTickProcessingDuration = Math.ceil((latestQuorumTickTimestamp - startupTime) / (quorumTick.tick - (system.initialTick || quorumTick.tick - 1)));
-
-                    system.tick = quorumTick.tick;
-
-                    if (system.initialTick === 0) {
-                        system.initialTick = system.tick;
-                    }
 
                     that.emit('tick', Object.freeze({
                         tick: quorumTick.tick,
@@ -417,7 +419,9 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                             if (digestBytesToString(respondedEntity.spectrumDigest) === nextQuorumTick.prevSpectrumDigest) {
                                 const entity = entities.get(respondedEntity.id);
 
-                                if (entity !== undefined && ((entity.tick || 0) < (entity.tick = quorumTick.tick))) {
+                                if (entity !== undefined && (entity.tick || 0) < quorumTick.tick) {
+                                    entity.tick = quorumTick.tick;
+
                                     entitiesByTick.get(quorumTick.tick).delete(respondedEntity.id);
                                     if (entitiesByTick.get(quorumTick.tick).size === 0) {
                                         entitiesByTick.delete(quorumTick.tick);
@@ -907,17 +911,20 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                 requestQuorumTick(peer, info.tick);
                                 requestQuorumTick(peer, info.tick + 1);
 
-                                    clearInterval(quorumTickRequestingInterval);
-                                    quorumTickRequestingInterval = setInterval(async () => {
-                                        await tickLock.acquire();
-                                        let tick = info.tick > system.tick ? info.tick - 1 : system.tick + 1;
-                                        if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
-                                            requestQuorumTick(peer, tick);
-                                        }
-                                        if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
-                                            requestQuorumTick(peer, tick + 1);
-                                        }
+                                clearInterval(quorumTickRequestingInterval);
+                                quorumTickRequestingInterval = setInterval(async () => {
+                                    await tickLock.acquire();
+                                    let tick = info.tick > system.tick ? info.tick - 1 : system.tick + 1;
+                                    tickLock.release();
 
+                                    if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
+                                        requestQuorumTick(peer, tick);
+                                    }
+                                    if ((ticks.get(tick + 1) || []).filter(t => t !== undefined).length < QUORUM) {
+                                        requestQuorumTick(peer, tick + 1);
+                                    }
+
+                                    if (!IS_BROWSER) {
                                         if ((ticks.get(tick) || []).filter(t => t !== undefined).length >= QUORUM) {
                                             tick += 2;
                                             if ((ticks.get(tick) || []).filter(t => t !== undefined).length < QUORUM) {
@@ -927,8 +934,8 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                                 requestQuorumTick(peer, tick + 1);
                                             }
                                         }
-                                        tickLock.release();
-                                    }, TARGET_TICK_DURATION);
+                                    }
+                                }, TARGET_TICK_DURATION);
                             }
 
                             if (IS_BROWSER) {

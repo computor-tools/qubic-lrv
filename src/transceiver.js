@@ -809,7 +809,7 @@ export const createTransceiver = function (receiveCallback) {
                     break;
 
                 case COMMUNICATION_PROTOCOLS.WEBSOCKET:
-                    if (socket !== undefined && socket.readyState < 2) {
+                    if (socket !== undefined) {
                         socket.send(packet);
                     }
                     break;
@@ -935,7 +935,7 @@ export const createTransceiver = function (receiveCallback) {
 
                     case COMMUNICATION_PROTOCOLS.WEBSOCKET:
                         if (socket !== undefined) {
-                            return socket.readyState === 1 ? 'open' : socket.readyState;
+                            return socket.readyState === 0 ? 'openning' : (socket.readyState === 1 ? 'open' : 'closed');
                         }
                         break;
                 }
@@ -1072,7 +1072,9 @@ export const createTransceiver = function (receiveCallback) {
                             protocol: COMMUNICATION_PROTOCOLS.WEBSOCKET,
                             dejavu: 1,
                             reply(response) {
-                                socket.send(response, true);
+                                try {
+                                    socket.send(response, true);
+                                } catch {}
                             },
                         });
                     },
@@ -1121,7 +1123,9 @@ export const createTransceiver = function (receiveCallback) {
                                 protocol: COMMUNICATION_PROTOCOLS.WEBSOCKET,
                                 dejavu,
                                 reply(response) {
-                                    socket.send(response, true);
+                                    try {
+                                        socket.send(response, true);
+                                    } catch {}
                                 },
                                 transmitToRandom,
                                 broadcast,
