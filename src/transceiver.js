@@ -795,7 +795,7 @@ export const createTransceiver = function (receiveCallback) {
         }
     };
 
-    const _connect = async function ({ protocol, address, port, rotationPeriod }, peerIndex) {
+    const _connect = async function ({ protocol, tls, address, port, rotationPeriod }, peerIndex) {
         let socket;
         let rotationTimeout;
         let shouldReconnect = true;
@@ -1010,7 +1010,7 @@ export const createTransceiver = function (receiveCallback) {
 
             case COMMUNICATION_PROTOCOLS.WEBSOCKET:
                 if (IS_BROWSER) {
-                    socket = new WebSocket(`ws://${address}:${port}`);
+                    socket = new WebSocket(`${tls ? 'wss' : 'ws'}://${address}:${port}`);
                     socket.binaryType = 'arraybuffer';
 
                     socket.addEventListener('open', function () {});
@@ -1204,6 +1204,10 @@ export const createTransceiver = function (receiveCallback) {
         
                 if (options[i].port === undefined) {
                     options[i].port = options[i].protocol === COMMUNICATION_PROTOCOLS.TCP ? CORE_PORT : PROXY_PORT;
+                }
+
+                if (options[i].tls === undefined) {
+                    options[i].tls = false;
                 }
 
                 if (options[i].rotationPeriod === undefined) {
