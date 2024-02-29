@@ -98,4 +98,4 @@ export const createLock = function () {
     };
 };
 
-export const IS_BROWSER = (typeof window !== 'undefined') && (typeof window.document !== 'undefined');
+export const IS_BROWSER = (typeof WorkerNavigator === 'function') || ((typeof window !== 'undefined') && (typeof window.document !== 'undefined'));
