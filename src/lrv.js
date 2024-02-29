@@ -453,11 +453,17 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
 
                                         entity.outgoingTransaction = undefined;
 
-                                        if (IS_BROWSER) {
-                                            localStorage.setItem(entity.id + '-' + outgoingTransaction.tick.toString(), localStorage.getItem(entity.id));
-                                            localStorage.removeItem(entity.id);
-                                        } else {
-                                            try {
+                                        try {
+                                            if (IS_BROWSER) {
+                                                if (typeof WorkerNavigator === 'function' && chrome.storage) {
+                                                    const storedValue = (await chrome.storage.local.get(entity.id)).value;
+                                                    await chrome.store.remove(entity.id);
+                                                    chrome.storage.local.set(entity.id + '-' + outgoingTransaction.tick.toString(), storedValue);
+                                                } else {
+                                                    localStorage.setItem(entity.id + '-' + outgoingTransaction.tick.toString(), localStorage.getItem(entity.id));
+                                                    localStorage.removeItem(entity.id);
+                                                }
+                                            } else {
                                                 const path = await importPath;
                                                 const fs = await importFs;
 
@@ -467,12 +473,12 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                                 if (fs.existsSync(file)) {
                                                     fs.renameSync(file, archive);
                                                 }
-                                            } catch (error) {
-                                                entity.transaction = outgoingTransactionCopy;
-                                                outgoingTransaction = undefined;
-
-                                                that.emit('error', error);
                                             }
+                                        } catch (error) {
+                                            entity.transaction = outgoingTransactionCopy;
+                                            outgoingTransaction = undefined;
+
+                                            that.emit('error', error);
                                         }
 
                                         if (outgoingTransaction !== undefined) {
@@ -1105,17 +1111,22 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
 
                         let storedTransactionBytes;
 
-                        if (IS_BROWSER) {
-                            storedTransactionBytes = shiftedHexToBytes(localStorage.getItem(id));
-                        } else {
-                            const path = await importPath;
-                            const fs = await importFs;
+                        try  {
+                            if (IS_BROWSER) {
+                                if (typeof WorkerNavigator === 'function' && chrome.storage) {
+                                    storedTransactionBytes = shiftedHexToBytes((await chrome.storage.local.get(id)).value);
+                                } else {
+                                    storedTransactionBytes = shiftedHexToBytes(localStorage.getItem(id));
+                                }
+                            } else {
+                                const path = await importPath;
+                                const fs = await importFs;
 
-                            const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
-                            const file = path.join(dir, id);
-                            const temp = file + '-temp';
+                                const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
+                                const file = path.join(dir, id);
+                                const temp = file + '-temp';
 
-                            try  {
+
                                 if (fs.existsSync(dir)) {
                                     if (fs.existsSync(temp)) {
                                         fs.unlinkSync(temp);
@@ -1124,10 +1135,10 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                         storedTransactionBytes = Uint8Array.from(buffer);
                                     }
                                 }
-                            } catch (error) {
-                                tickLock.release();
-                                throw error;
                             }
+                        } catch (error) {
+                            tickLock.release();
+                            throw error;
                         }
 
                         if (storedTransactionBytes !== undefined) {
@@ -1246,18 +1257,23 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                         throw error;
                                     }
 
-                                    if (IS_BROWSER) {
-                                        // TODO: encrypt
-                                        localStorage.setItem(id, bytesToShiftedHex(entity.outgoingTransaction.bytes));
-                                    } else {
-                                        const path = await importPath;
-                                        const fs = await importFs;
+                                    try {
+                                        if (IS_BROWSER) {
+                                            // TODO: encrypt
+                                            if (typeof WorkerNavigator === 'function' && chrome.storage) {
+                                                await chrome.storage.local.set(id, bytesToShiftedHex(entity.outgoingTransaction.bytes));
+                                            } else {
+                                                localStorage.setItem(id, bytesToShiftedHex(entity.outgoingTransaction.bytes));
+                                            }
+                                        } else {
+                                            const path = await importPath;
+                                            const fs = await importFs;
 
-                                        const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
-                                        const file = path.join(dir, id);
-                                        const temp = file + '-temp';
+                                            const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
+                                            const file = path.join(dir, id);
+                                            const temp = file + '-temp';
 
-                                        try {
+
                                             if (!fs.existsSync(dir)) {
                                                 fs.mkdirSync(dir);
                                             }
@@ -1265,14 +1281,14 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                             // TODO: encrypt
                                             fs.writeFileSync(temp, Uint8Array.from(entity.outgoingTransaction.bytes));
                                             fs.renameSync(temp, file);
-                                        } catch (error) {
-                                            entity.outgoingTransaction = undefined;
-
-                                            tickLock.release();
-                                            transactionLock.release();
-
-                                            throw error;
                                         }
+                                    } catch (error) {
+                                        entity.outgoingTransaction = undefined;
+
+                                        tickLock.release();
+                                        transactionLock.release();
+
+                                        throw error;
                                     }
 
                                     tickLock.release();
@@ -1295,13 +1311,22 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                     }
 
                                     if (IS_BROWSER) {
-                                        const transaction = localStorage.getItem(entity.id + '-' + tick.toString());
+                                        if (typeof WorkerNavigator === 'function' && chrome.storage) {
+                                            const transaction = await chrome.storage.local.get(entity.id + '-' + tick.toString());
 
-                                        if (transaction) {
-                                            localStorage.setItem(entity.id, transaction);
-                                            localStorage.removeItem(entity.id);
+                                            if (transaction) {
+                                                await chrome.storage.local.remove(entity.id + '-' + tick.toString());
+                                            } else {
+                                                throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
+                                            }
                                         } else {
-                                            throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
+                                            const transaction = localStorage.getItem(entity.id + '-' + tick.toString());
+
+                                            if (transaction) {
+                                                localStorage.removeItem(entity.id);
+                                            } else {
+                                                throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
+                                            }
                                         }
                                     } else {
                                         const path = await importPath;
