@@ -457,11 +457,16 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                             if (IS_BROWSER) {
                                                 if (typeof WorkerNavigator === 'function' && chrome.storage) {
                                                     const storedValue = (await chrome.storage.local.get(entity.id)).value;
-                                                    await chrome.store.remove(entity.id);
-                                                    chrome.storage.local.set(entity.id + '-' + outgoingTransaction.tick.toString(), storedValue);
+                                                    if (storedValue) {
+                                                        await chrome.storage.local.remove(entity.id);
+                                                        await chrome.storage.local.set(entity.id + '-' + outgoingTransaction.tick.toString(), storedValue);
+                                                    }
                                                 } else {
-                                                    localStorage.setItem(entity.id + '-' + outgoingTransaction.tick.toString(), localStorage.getItem(entity.id));
-                                                    localStorage.removeItem(entity.id);
+                                                    const storedValue = localStorage.getItem(entity.id);
+                                                    if (storedValue) {
+                                                        localStorage.setItem(entity.id + '-' + outgoingTransaction.tick.toString(), storedValue);
+                                                        localStorage.removeItem(entity.id);
+                                                    }
                                                 }
                                             } else {
                                                 const path = await importPath;
@@ -1114,9 +1119,15 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                         try  {
                             if (IS_BROWSER) {
                                 if (typeof WorkerNavigator === 'function' && chrome.storage) {
-                                    storedTransactionBytes = shiftedHexToBytes((await chrome.storage.local.get(id)).value);
+                                    const storedValue = (await chrome.storage.local.get(id)).value;
+                                    if (storedValue) {
+                                        storedTransactionBytes = shiftedHexToBytes(storedValue);
+                                    }
                                 } else {
-                                    storedTransactionBytes = shiftedHexToBytes(localStorage.getItem(id));
+                                    const storedValue = localStorage.getItem(id);
+                                    if (storedValue) {
+                                        storedTransactionBytes = shiftedHexToBytes();
+                                    }
                                 }
                             } else {
                                 const path = await importPath;
@@ -1312,7 +1323,7 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
 
                                     if (IS_BROWSER) {
                                         if (typeof WorkerNavigator === 'function' && chrome.storage) {
-                                            const transaction = await chrome.storage.local.get(entity.id + '-' + tick.toString());
+                                            const transaction = (await chrome.storage.local.get(entity.id + '-' + tick.toString())).value;
 
                                             if (transaction) {
                                                 await chrome.storage.local.remove(entity.id + '-' + tick.toString());
