@@ -882,7 +882,7 @@ export const createTransceiver = function (receiveCallback) {
                 }
 
                 setTimeout(function () {
-                    _connect({ protocol, port, address: anotherAddress || address, rotationPeriod }, peerIndex);
+                    _connect({ protocol, tls, port, address: anotherAddress || address, rotationPeriod }, peerIndex);
                 }, 1000);
             }
         };
