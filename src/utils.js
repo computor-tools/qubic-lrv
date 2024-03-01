@@ -107,7 +107,7 @@ const idb = function (name) {
     return {
         connect(version) {
             return new Promise(function (resolve, reject) {
-                const request = window.indexedDB.open(name, version);
+                const request = indexedDB.open(name, version);
                 request.onsuccess = function (event) {
                     connection = event.target.result;
                     resolve();
