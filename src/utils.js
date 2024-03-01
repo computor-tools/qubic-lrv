@@ -99,3 +99,171 @@ export const createLock = function () {
 };
 
 export const IS_BROWSER = (typeof WorkerNavigator === 'function') || ((typeof window !== 'undefined') && (typeof window.document !== 'undefined'));
+
+const idb = function (name) {
+    let connection;
+    let upgradeNeeded = false;
+
+    return {
+        connect(version) {
+            return new Promise(function (resolve, reject) {
+                const request = window.indexedDB.open(name, version);
+                request.onsuccess = function (event) {
+                    connection = event.target.result;
+                    resolve();
+                };
+                request.onupgradeneeded = function (event) {
+                    connection = event.target.result;
+                    upgradeNeeded = true;
+                    resolve();
+                };
+                request.onerror = function (event) {
+                    reject(event);
+                };
+            });
+        },
+        create(store) {
+            return new Promise(function (resolve, reject) {
+                if (!upgradeNeeded) {
+                    resolve();
+                }
+                const objectStore = connection.createObjectStore(store.name, { keyPath: store.keyPath });
+                objectStore.transaction.oncomplete = function () {
+                    resolve();
+                };
+                objectStore.transaction.onerror = function (event) {
+                    reject(event);
+                };
+            });
+        },
+        get(store, key) {
+            return new Promise(function (resolve, reject) {
+                const transaction = connection.transaction([store]).objectStore(store);
+                const request = transaction.get(key);
+                request.onsuccess = function (event) {
+                    resolve(event.target.result);
+                };
+                request.onerror = function (event) {
+                    reject(event);
+                };
+            });
+        },
+        append(store, data) {
+            return new Promise(function (resolve, reject) {
+                const transaction = connection.transaction([store], 'readwrite').objectStore(store);
+                const request = transaction.add(data);
+                request.onsuccess = function () {
+                    resolve();
+                };
+                request.onerror = function(event) {
+                    reject(event);
+                };
+            });
+        },
+        remove(store, key) {
+            return new Promise((resolve, reject) => {
+                const transaction = connection.transaction([store], 'readwrite').objectStore(store);
+                const request = transaction.delete(key);
+                request.onsuccess = function () {
+                    resolve();
+                };
+                request.onerror = function (event) {
+                    reject(event);
+                };
+            });
+        },
+    };
+};
+
+export const createStore = async function (store) {
+    if (IS_BROWSER) {
+        const db = idb('qubic-lrv');
+
+        await db.connect(1);
+        await db.create(store);
+
+        return {
+            async get(key, tick) {
+                const data = await db.get(store.name, tick ? `${key}-${tick}` : key);
+                if (data) {
+                    return data.value;
+                }
+            },
+            append(key, value) {
+                return db.append(store.name, {
+                    [store.keyPath]: key,
+                    value: value,
+                });
+            },
+            async remove(key, tick) {
+                const data = await db.get(store.name, tick ? `${key}-${tick}` : key);
+                if (data) {
+                    return db.remove(store.name, tick ? `${key}-${tick}` : key);
+                }
+            },
+            async archive(key, tick) {
+                const data = await db.get(store.name, key);
+                if (data) {
+                    await db.append(store.name, {
+                        [store.keyPath]: `${key}-${tick}`,
+                        value: data.value,
+                    });
+                    await db.remove(store.name, key);
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+        };
+    } else {
+        const path = await import('node:path');
+        const fs = await import('node:fs');
+
+        const dir = path.join(process.cwd(), store);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir);
+        }
+
+        return {
+            get(key, tick) {
+                const file = path.join(dir, key);
+                if (tick) {
+                    const archive = `${file}-${tick}`;
+                    if (fs.existsSync(archive)) {
+                        return Uint8Array.from(fs.readFileSync(archive));
+                    }
+                } else {
+                    const temp = `${file}-temp`;
+                    if (fs.existsSync(temp)) {
+                        fs.unlinkSync(temp);
+                    } else {
+                        if (fs.existsSync(file)) {
+                            return Uint8Array.from(fs.readFileSync(file));
+                        }
+                    }
+                }
+            },
+            append(key, value) {
+                const file = path.join(dir, key);
+                const temp = `${file}-temp`;
+                fs.writeFileSync(temp, Uint8Array.from(value));
+                fs.renameSync(temp, file);
+            },
+            remove(key, tick) {
+                const file = path.join(dir, tick ? `${key}-${tick}` : key);
+                if (fs.existsSync(file)) {
+                    fs.unlinkSync(file);
+                }
+            },
+            archive(key, tick) {
+                const file = path.join(dir, key);
+                if (fs.existsSync(file)) {
+                    fs.renameSync(file, `${file}-${tick}`);
+                    return true;
+                } else {
+                    return false;
+                }
+            },
+        }
+    }
+};

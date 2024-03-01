@@ -90,10 +90,8 @@ import {
     bytesToBigUint64,
     bigUint64ToString,
     NULL_ID_STRING,
-    shiftedHexToBytes,
-    bytesToShiftedHex,
 } from './converter.js';
-import { isZero, equal, createLock, IS_BROWSER } from './utils.js';
+import { isZero, equal, createLock, IS_BROWSER, createStore } from './utils.js';
 import { createPrivateKey, createId, SEED_LENGTH } from './id.js';
 import { TRANSACTION, createTransaction, inspectTransaction } from './transaction.js';
 
@@ -113,10 +111,7 @@ export {
     inspectTransaction,
 };
 
-const importPath = Promise.resolve(!IS_BROWSER && import('node:path'));
-const importFs = Promise.resolve(!IS_BROWSER && import('node:fs'));
-
-const STORED_ENTITIES_DIR = 'stored_entities';
+const ENTITIES_STORE = 'entities';
 
 const inferEpoch = function() {
     const now = new Date();
@@ -169,6 +164,8 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
         let numberOfClearedTransactions = 0;
 
         let latestQuorumTickTimestamp;
+
+        const store = createStore(ENTITIES_STORE);
 
         const requestComputors = function (peer) {
             const request = createPacket(REQUEST_COMPUTORS.TYPE);
@@ -454,31 +451,7 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                         entity.outgoingTransaction = undefined;
 
                                         try {
-                                            if (IS_BROWSER) {
-                                                if (typeof WorkerNavigator === 'function' && chrome.storage) {
-                                                    const storedValue = (await chrome.storage.local.get(entity.id)).value;
-                                                    if (storedValue) {
-                                                        await chrome.storage.local.remove(entity.id);
-                                                        await chrome.storage.local.set(entity.id + '-' + outgoingTransaction.tick.toString(), storedValue);
-                                                    }
-                                                } else {
-                                                    const storedValue = localStorage.getItem(entity.id);
-                                                    if (storedValue) {
-                                                        localStorage.setItem(entity.id + '-' + outgoingTransaction.tick.toString(), storedValue);
-                                                        localStorage.removeItem(entity.id);
-                                                    }
-                                                }
-                                            } else {
-                                                const path = await importPath;
-                                                const fs = await importFs;
-
-                                                const file = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id);
-                                                const archive = file + '-' + outgoingTransaction.tick.toString();
-
-                                                if (fs.existsSync(file)) {
-                                                    fs.renameSync(file, archive);
-                                                }
-                                            }
+                                            await (await store).archive(entity.id, outgoingTransaction.tick.toString());
                                         } catch (error) {
                                             entity.transaction = outgoingTransactionCopy;
                                             outgoingTransaction = undefined;
@@ -1116,37 +1089,8 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
 
                         let storedTransactionBytes;
 
-                        try  {
-                            if (IS_BROWSER) {
-                                if (typeof WorkerNavigator === 'function' && chrome.storage) {
-                                    const storedValue = (await chrome.storage.local.get(id)).value;
-                                    if (storedValue) {
-                                        storedTransactionBytes = shiftedHexToBytes(storedValue);
-                                    }
-                                } else {
-                                    const storedValue = localStorage.getItem(id);
-                                    if (storedValue) {
-                                        storedTransactionBytes = shiftedHexToBytes();
-                                    }
-                                }
-                            } else {
-                                const path = await importPath;
-                                const fs = await importFs;
-
-                                const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
-                                const file = path.join(dir, id);
-                                const temp = file + '-temp';
-
-
-                                if (fs.existsSync(dir)) {
-                                    if (fs.existsSync(temp)) {
-                                        fs.unlinkSync(temp);
-                                    } else if (fs.existsSync(file)) {
-                                        const buffer = fs.readFileSync(file);
-                                        storedTransactionBytes = Uint8Array.from(buffer);
-                                    }
-                                }
-                            }
+                        try {
+                            storedTransactionBytes = await (await store).get(id);
                         } catch (error) {
                             tickLock.release();
                             throw error;
@@ -1269,30 +1213,7 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                     }
 
                                     try {
-                                        if (IS_BROWSER) {
-                                            // TODO: encrypt
-                                            if (typeof WorkerNavigator === 'function' && chrome.storage) {
-                                                await chrome.storage.local.set(id, bytesToShiftedHex(entity.outgoingTransaction.bytes));
-                                            } else {
-                                                localStorage.setItem(id, bytesToShiftedHex(entity.outgoingTransaction.bytes));
-                                            }
-                                        } else {
-                                            const path = await importPath;
-                                            const fs = await importFs;
-
-                                            const dir = path.join(process.cwd(), STORED_ENTITIES_DIR);
-                                            const file = path.join(dir, id);
-                                            const temp = file + '-temp';
-
-
-                                            if (!fs.existsSync(dir)) {
-                                                fs.mkdirSync(dir);
-                                            }
-
-                                            // TODO: encrypt
-                                            fs.writeFileSync(temp, Uint8Array.from(entity.outgoingTransaction.bytes));
-                                            fs.renameSync(temp, file);
-                                        }
+                                        await (await store).append(id, entity.outgoingTransaction.bytes);
                                     } catch (error) {
                                         entity.outgoingTransaction = undefined;
 
@@ -1317,39 +1238,15 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                 async removeTransaction(tick) {
                                     if (entity.outgoingTransaction !== undefined) {
                                         if (entity.outgoingTransaction.tick === tick) {
-                                            throw new Error('Transaction is pending, cannot be removed from archive');
+                                            throw new Error('Transaction is pending, cannot be removed!');
                                         }
                                     }
 
-                                    if (IS_BROWSER) {
-                                        if (typeof WorkerNavigator === 'function' && chrome.storage) {
-                                            const transaction = (await chrome.storage.local.get(entity.id + '-' + tick.toString())).value;
-
-                                            if (transaction) {
-                                                await chrome.storage.local.remove(entity.id + '-' + tick.toString());
-                                            } else {
-                                                throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
-                                            }
-                                        } else {
-                                            const transaction = localStorage.getItem(entity.id + '-' + tick.toString());
-
-                                            if (transaction) {
-                                                localStorage.removeItem(entity.id);
-                                            } else {
-                                                throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
-                                            }
-                                        }
+                                    const exists = await (await store).get(id, tick.toString());
+                                    if (!exists) {
+                                        throw new Error(`Transaction does not exist. (id: ${id}, tick: ${tick.toString()})`);
                                     } else {
-                                        const path = await importPath;
-                                        const fs = await importFs;
-
-                                        const archive = path.join(process.cwd(), STORED_ENTITIES_DIR, entity.id + '-' + tick.toString());
-
-                                        if (fs.existsSync(archive)) {
-                                            fs.unlinkSync(archive);
-                                        } else {
-                                            throw new Error(`Transaction does not exist. (id: ${entity.id}, tick: ${tick.toString()})`);
-                                        }
+                                        await (await store).remove(id, tick.toString());
                                     }
                                 },
                             },
