@@ -1124,6 +1124,10 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                     return id;
                                 },
 
+                                unsubscribe() {
+                                    entities.delete(id);
+                                },
+
                                 async executionTick() {
                                     await executionTickLock.acquire();
 
@@ -1145,6 +1149,7 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                     contractIPO_BidQuantity,
                                 }) {
                                     await transactionLock.acquire();
+
                                     await tickLock.acquire();
 
                                     try {
