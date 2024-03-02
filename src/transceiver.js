@@ -288,6 +288,7 @@ export const BROADCAST_TRANSACTION = {
         return this.INPUT_TYPE_OFFSET + this.INPUT_TYPE_LENGTH;
     },
     INPUT_SIZE_LENGTH: TRANSACTION.INPUT_SIZE_LENGTH,
+    INPUT_OFFSET: TRANSACTION.INPUT_OFFSET,
 
     MAX_INPUT_SIZE: TRANSACTION.MAX_INPUT_SIZE,
 
@@ -1047,7 +1048,7 @@ export const createTransceiver = function (receiveCallback) {
 
             const broadcast = function (packet) {
                 for (let i = 0; i < peers[COMMUNICATION_PROTOCOLS.TCP].length; i++) {
-                    if (peers[COMMUNICATION_PROTOCOLS.TCP][i].readyState() !== 'open') {
+                    if (peers[COMMUNICATION_PROTOCOLS.TCP][i].readyState() === 'open') {
                         peers[COMMUNICATION_PROTOCOLS.TCP][i].transmit(packet);
                     }
                 }
@@ -1129,7 +1130,9 @@ export const createTransceiver = function (receiveCallback) {
                                 },
                                 transmitToRandom,
                                 broadcast,
-                                ignore: socket.close,
+                                ignore() {
+                                    socket.close()
+                                },
                             });
                         } else {
                             socket.close();

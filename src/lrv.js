@@ -512,7 +512,7 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                         spectrumIndex: entity.spectrumIndex,
                                         spectrumDigest: entity.spectrumDigest,
 
-                                        ...(outgoingTransaction ?  { outgoingTransaction } : {}),
+                                        ...((outgoingTransaction || entity.outgoingTransaction) ?  { outgoingTransaction: outgoingTransaction || entity.outgoingTransaction } : {}),
                                     }));
 
                                     if ((entity.outgoingTransaction === undefined || entity.outgoingTransaction.tick <= system.tick) && entity.emitter) {
@@ -837,18 +837,17 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                     }
                     break;
 
-                case BROADCAST_TRANSACTION:
+                case BROADCAST_TRANSACTION.TYPE:
                     if (peer.dejavu === 0 && message.length >= BROADCAST_TRANSACTION.MIN_LENGTH && message.length <= BROADCAST_TRANSACTION.MAX_LENGTH) {
                         const transactionView = new DataView(message.buffer, message.byteOffset);
-                        const inputSize = transactionView.getUint16(TRANSACTION.INPUT_SIZE_OFFSET, true);
+                        const inputSize = transactionView.getUint16(BROADCAST_TRANSACTION.INPUT_SIZE_OFFSET, true);
 
-                        if (message.length === inputSize + crypto.SIGNATURE_LENGTH + BROADCAST_TRANSACTION.MIN_LENGTH) {
+                        if (inputSize <= BROADCAST_TRANSACTION.MAX_INPUT_SIZE && message.length === BROADCAST_TRANSACTION.MIN_LENGTH + inputSize) {
                             const digest = new Uint8Array(crypto.DIGEST_LENGTH);
-                            const signature = message.subarray(TRANSACTION.INPUT_OFFSET + inputSize, TRANSACTION.length(inputSize));
 
-                            await crypto.K12(message.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
+                            await crypto.K12(message.subarray(BROADCAST_TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET, BROADCAST_TRANSACTION.INPUT_OFFSET + inputSize), digest, crypto.DIGEST_LENGTH);
 
-                            if (await crypto.verify(message.subarray(TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET,  TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH), digest, signature)) {
+                            if (await crypto.verify(message.subarray(BROADCAST_TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET,  BROADCAST_TRANSACTION.SOURCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH), digest, message.subarray(BROADCAST_TRANSACTION.INPUT_OFFSET + inputSize, BROADCAST_TRANSACTION.MIN_LENGTH + inputSize))) {
                                 peer.broadcast(packet);
                             } else {
                                 peer.ignore();
