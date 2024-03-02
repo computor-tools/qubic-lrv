@@ -111,7 +111,10 @@ export {
     inspectTransaction,
 };
 
-const ENTITIES_STORE = 'entities';
+const ENTITIES_STORE = {
+    name: 'entities',
+    keyPath: 'id',
+};
 
 const inferEpoch = function() {
     const now = new Date();

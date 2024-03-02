@@ -219,7 +219,7 @@ export const createStore = async function (store) {
         const path = await import('node:path');
         const fs = await import('node:fs');
 
-        const dir = path.join(process.cwd(), store);
+        const dir = path.join(process.cwd(), store.name);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir);
         }
