@@ -192,7 +192,7 @@ export const createStore = async function (store) {
             append(key, value) {
                 return db.append(store.name, {
                     [store.keyPath]: key,
-                    value: value,
+                    value: new Uint8Array(value),
                 });
             },
             async remove(key, tick) {
