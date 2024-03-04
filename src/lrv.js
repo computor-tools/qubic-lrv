@@ -454,7 +454,11 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                         entity.outgoingTransaction = undefined;
 
                                         try {
-                                            await (await store).archive(entity.id, outgoingTransaction.tick.toString());
+                                            if (outgoingTransaction.executed) {
+                                                await (await store).archive(entity.id, outgoingTransaction.tick.toString());
+                                            } else {
+                                                await (await store).archive(entity.id, `failed-${outgoingTransaction.tick.toString()}`);
+                                            }
                                         } catch (error) {
                                             entity.transaction = outgoingTransactionCopy;
                                             outgoingTransaction = undefined;
@@ -1242,6 +1246,14 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                     }
                                 },
 
+                                async getTransactions(offset, count) {
+                                    // TODO: sign keys of the store and verify signature before accepting this data
+                                    return (await (await store).getRange(offset, count)).map(async ({ state, value }) => Object.freeze({
+                                        ...(await inspectTransaction(value)),
+                                        processed: state,
+                                    }).filter((transaction) => transaction.sourceId === id));
+                                },
+
                                 async removeTransaction(tick) {
                                     if (entity.outgoingTransaction !== undefined) {
                                         if (entity.outgoingTransaction.tick === tick) {
@@ -1249,9 +1261,14 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                         }
                                     }
 
-                                    const exists = await (await store).get(id, tick.toString());
+                                    let exists = await (await store).get(id, tick.toString());
                                     if (!exists) {
-                                        throw new Error(`Transaction does not exist. (id: ${id}, tick: ${tick.toString()})`);
+                                        exists = await (await store).get(id, `failed-${tick.toString()}`);
+                                        if (!exists) {
+                                            throw new Error(`Transaction does not exist. (id: ${id}, tick: ${tick.toString()})`);
+                                        } else {
+                                            await (await store).remove(id, `failed-${tick.toString()}`);
+                                        }
                                     } else {
                                         await (await store).remove(id, tick.toString());
                                     }

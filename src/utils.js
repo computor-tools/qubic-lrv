@@ -148,6 +148,43 @@ const idb = function (name) {
                 };
             });
         },
+        getRange(store, offset = 0, count = Number.POSITIVE_INFINITY) {
+            return new Promise(function (resolve, reject) {
+                const transaction = db.transaction([store]).objectStore(store);
+                const request = transaction.openCursor();
+
+                const data = [];
+                let i = 0;
+
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (i === 0) {
+                        cursor.advance(offset);
+                    }
+                    if (cursor) {
+                        if (cursor.indexOf('-')) {
+                            data.push({
+                                state: cursor.key.indexOf('-failed') === -1 ? true : false,
+                                value: cursor.value,
+                            });
+
+                            if (++i < count) {
+                                cursor.continue();
+                            } else {
+                                resolve(data);
+                            }
+                        } else {
+                            cursor.continue();
+                        }
+                    } else {
+                        resolve(data);
+                    }
+                };
+                request.onerror = function (event) {
+                    reject(event);
+                };
+            });
+        },
         append(store, data) {
             return new Promise(function (resolve, reject) {
                 const transaction = connection.transaction([store], 'readwrite').objectStore(store);
@@ -188,6 +225,9 @@ export const createStore = async function (store) {
                 if (data) {
                     return data.value;
                 }
+            },
+            getRange(offset, count) {
+                return db.getRange(store.name, offset, count);
             },
             append(key, value) {
                 return db.append(store.name, {
@@ -242,6 +282,9 @@ export const createStore = async function (store) {
                         }
                     }
                 }
+            },
+            getRange(offset, count) {
+                return [];
             },
             append(key, value) {
                 const file = path.join(dir, key);
