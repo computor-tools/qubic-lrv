@@ -158,7 +158,7 @@ const idb = function (name) {
 
                 request.onsuccess = (event) => {
                     const cursor = event.target.result;
-                    if (i === 0) {
+                    if (i === 0 && offset > 0) {
                         cursor.advance(offset);
                     }
                     if (cursor) {
