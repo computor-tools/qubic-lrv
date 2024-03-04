@@ -162,7 +162,7 @@ const idb = function (name) {
                         cursor.advance(offset);
                     }
                     if (cursor) {
-                        if (cursor.indexOf('-')) {
+                        if (cursor.key.indexOf('-')) {
                             data.push({
                                 state: cursor.key.indexOf('-failed') === -1 ? true : false,
                                 value: cursor.value,
