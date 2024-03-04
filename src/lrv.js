@@ -1250,7 +1250,7 @@ export const lrv = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_PER_EPOCH
                                     // TODO: sign keys of the store and verify signature before accepting this data
                                     return (await Promise.all((await (await store).getRange(offset, count)).map(async ({ state, value }) => Object.freeze({
                                         ...(await inspectTransaction(value)),
-                                        processed: state,
+                                        executed: state,
                                     })))).filter((transaction) => transaction.sourceId === id);
                                 },
 
