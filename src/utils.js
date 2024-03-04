@@ -156,7 +156,7 @@ const idb = function (name) {
                 const data = [];
                 let i = 0;
 
-                request.onsuccess = (event) => {
+                request.onsuccess = async (event) => {
                     const cursor = event.target.result;
                     if (i === 0 && offset > 0) {
                         cursor.advance(offset);
@@ -165,7 +165,7 @@ const idb = function (name) {
                         if (cursor.key.indexOf('-')) {
                             data.push({
                                 state: cursor.key.indexOf('-failed') === -1 ? true : false,
-                                value: cursor.value,
+                                value: await cursor.value,
                             });
 
                             if (++i < count) {
