@@ -150,7 +150,7 @@ const idb = function (name) {
         },
         getRange(store, offset = 0, count = Number.POSITIVE_INFINITY) {
             return new Promise(function (resolve, reject) {
-                const transaction = db.transaction([store]).objectStore(store);
+                const transaction = connection.transaction([store]).objectStore(store);
                 const request = transaction.openCursor();
 
                 const data = [];
