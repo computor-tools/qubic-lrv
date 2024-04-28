@@ -3,7 +3,7 @@
   "main": "./src/client.js",
   "module": "./src/client.js",
   "dependencies": {
-    "qubic-crypto": "github:computor-tools/qubic-crypto#ad4298266dc4bddc6cbca7a362f9f9f1d6eb2834"
+    "qubic-crypto": "github:computor-tools/qubic-crypto#06f76a1df3e3823a4bd28eac44bc8b60ce963a57"
   },
   "trustedDependencies": ["qubic-crypto"],
   "type": "module"
