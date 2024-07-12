@@ -51,6 +51,9 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 'use strict'
 
 import * as qubic from './src/client.js';
+import { CONTRACTS } from './src/constants.js';
+import { NULL_ID_STRING } from './src/converter.js';
+import { MIN_NUMBER_OF_PUBLIC_PEERS } from './src/transceiver.js';
 
 const test = async function ({ seed, pingPongAmount }) {
     if (process.env.PUBLIC_PEERS === undefined) {
@@ -62,17 +65,23 @@ const test = async function ({ seed, pingPongAmount }) {
 
     await client.subscribe({ id: qubic.ARBITRATOR }); // subscribe to arbitrary id
 
-    client.addListener('epoch', (epoch) => console.log('Epoch:', epoch.epoch));
-    client.addListener('tick', (tick) => console.log('\nTick  :', tick.tick, tick.spectrumDigest, tick.universeDigest, tick.computerDigest));
+    client.addListener('epoch', (epoch) => console.log('\n  Epoch:', epoch.epoch));
+    client.addListener('tick', (tick) => console.log('\n   Tick:', tick.tick, "\x1b[2m" + tick.spectrumDigest, tick.universeDigest, tick.computerDigest + "\x1b[0m"));
     client.addListener('entity', (entity) => {
         if (entity.outgoingTransfer !== undefined) {
-            console.log('Entity:', entity.tick, entity.spectrumDigest, entity.id, entity.energy, entity.outgoingTransfer.digest, entity.outgoingTransfer.tick, 'executed:', entity.outgoingTransfer.executed);
+            console.log(' Entity:', entity.tick, entity.spectrumDigest, entity.id, entity.energy, entity.outgoingTransfer.digest, entity.outgoingTransfer.tick, 'executed:', entity.outgoingTransfer.executed);
         } else {
-            console.log('Entity:', entity.tick, entity.spectrumDigest, entity.id, entity.energy);
+            console.log(' Entity:', entity.tick, entity.id + ':', entity.energy, "\x1b[2m" + entity.spectrumDigest + "\x1b[0m");
         }
     });
-    client.addListener('transfer', (transfer) => console.log('Transfer:', transfer));
-    client.addListener('tick_stats', (stats) => console.log('Stats :', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared'));
+    client.addListener('asset', async (asset) => {
+        console.log('  Asset:', asset.tick, asset.ownership.ownerId + ':', asset.ownership.numberOfShares, asset.issuance.name, 'shares,', 'issued by', (asset.issuance.issuerId === await NULL_ID_STRING ? 'QUORUM' : asset.issuance.issuerId) + ',', 'managed by #' + asset.ownership.managingContractIndex + '-' + CONTRACTS[asset.ownership.managingContractIndex], "\x1b[2m" + asset.universeDigest + "\x1b[0m");
+    });
+    client.addListener('transfer', (transfer) => console.log(' Transfer:', transfer));
+
+    let networkStats = { publicPeers: [], peers: [] };
+    client.addListener('tick_stats', (stats) => console.log('  Stats:', stats.tick, '(' + stats.numberOfSkippedTicks.toString() + ' skipped)', stats.duration.toString() + 'ms,', stats.numberOfUpdatedEntities, 'entities updated', stats.numberOfSkippedEntities, 'skipped,', stats.numberOfClearedTransactions, 'txs cleared,', networkStats.publicPeers.length, 'known peers', networkStats.peers.length + '/' + MIN_NUMBER_OF_PUBLIC_PEERS));
+    client.addListener('network', (network) => (networkStats = network));
 
     client.addListener('error', (error) => console.log(error.message));
 
@@ -85,23 +94,23 @@ const test = async function ({ seed, pingPongAmount }) {
         ];
         const entity = await client.createEntity(privateKeys[0]); // creating an entity, autogenerates subscription by entity.id
 
-        const destinationId = (await client.createEntity(privateKeys[1])).id; // own destination
+        // const destinationId = (await client.createEntity(privateKeys[1])).id; // own destination
 
-        try {
-            const transaction = await entity.createTransaction(
-                privateKeys[0],
-                {
-                    destinationId,
-                    amount: pingPongAmount,
-                    tick: await entity.executionTick(), // request suitable execution tick
-                }
-            );
-            entity.broadcastTransaction(); // broadcasts the latest non-processed transaction
+        // try {
+        //     const transaction = await entity.createTransaction(
+        //         privateKeys[0],
+        //         {
+        //             destinationId,
+        //             amount: pingPongAmount,
+        //             tick: await entity.executionTick(), // request suitable execution tick
+        //         }
+        //     );
+        //     entity.broadcastTransaction(); // broadcasts the latest non-processed transaction
 
-            console.log('Tx:', transaction.digest, transaction.tick);
-        } catch (error) {
-            console.log('Error:', error.message);
-        }
+        //     console.log('Tx:', transaction.digest, transaction.tick);
+        // } catch (error) {
+        //     console.log('Error:', error.message);
+        // }
     }
 };
 

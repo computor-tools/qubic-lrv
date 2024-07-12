@@ -57,140 +57,140 @@ export const LE = true;
 export const ALPHABET = 'abcdefghijklmnopqrstuvwxyz';
 
 export const bytesToBigUint64 = function (bytes) {
-  const view = new DataView(bytes.buffer, bytes.byteOffset);
-  return view.getBigUint64(0, true);
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    return view.getBigUint64(0, true);
 };
 
 export const bigUint64ToBytes = function (value) {
-  const bytes = new Uint8Array(8);
-  const view = new DataView(bytes.buffer, bytes.byteOffset);
-  view.setBigUint64(0, value, true);
-  return bytes;
+    const bytes = new Uint8Array(8);
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    view.setBigUint64(0, value, true);
+    return bytes;
 };
 
 export const bigUint64ToString = function (value) {
-  let s = '';
+    let s = '';
 
-  for (let j = 0; j < 14; j++) {
-    s += String.fromCharCode(Number(value % 26n + BigInt('A'.charCodeAt(0))));
-    value /= 26n;
-  }
+    for (let j = 0; j < 14; j++) {
+        s += String.fromCharCode(Number(value % 26n + BigInt('A'.charCodeAt(0))));
+        value /= 26n;
+    }
 
-  return s.toLocaleLowerCase();
+    return s.toLocaleLowerCase();
 };
 
 export const NULL_BIG_UINT64_STRING = bigUint64ToBytes(0n);
 
 export const stringToBigUint64 = function (s) {
-  s = s.toUpperCase();
+    s = s.toUpperCase();
 
-  let value = 0n;
+    let value = 0n;
 
-  for (let j = 14; j-- > 0;) {
-    value *= 26n + BigInt(s.charCodeAt(j)) - BigInt('A'.charCodeAt(0)); 
-  }
+    for (let j = 14; j-- > 0;) {
+        value *= 26n + BigInt(s.charCodeAt(j)) - BigInt('A'.charCodeAt(0)); 
+    }
 
-  return value;
+    return value;
 };
 
 export const bytes32ToString = function (bytes) {
-  if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
-    throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
-  }
-  if (bytes.byteLength !== 32) {
-    throw new RangeError('Invalid byte length.');
-  }
-
-  const view = new DataView(bytes.buffer, bytes.byteOffset);
-  let s = '';
-
-  for (let i = 0; i < 4; i++){
-    let fragment = view.getBigUint64(i << 3, LE);
-    for (let j = 0; j < 14; j++) {
-      s += String.fromCharCode(Number(fragment % 26n + BigInt('A'.charCodeAt(0))));
-      fragment /= 26n;
+    if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
+        throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
     }
-  }
+    if (bytes.byteLength !== 32) {
+        throw new RangeError('Invalid byte length.');
+    }
 
-  return s.toLowerCase();
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+    let s = '';
+
+    for (let i = 0; i < 4; i++){
+        let fragment = view.getBigUint64(i << 3, LE);
+        for (let j = 0; j < 14; j++) {
+        s += String.fromCharCode(Number(fragment % 26n + BigInt('A'.charCodeAt(0))));
+        fragment /= 26n;
+        }
+    }
+
+    return s.toLowerCase();
 };
 
 export const stringToBytes32 = function (s) {
-  if (new RegExp(`^[a-z]{${4 * 14}}$`).test(s) === false) {
-    throw new Error(`Invalid string. Expected ${4 * 14} lowercase latin chars.`);
-  }
-
-  s = s.toUpperCase();
-
-  const bytes = new Uint8Array(32);
-  const view = new DataView(bytes.buffer, bytes.byteOffset);
-
-  for (let i = 0; i < 4; i++) {
-    view.setBigUint64(i * 8, 0n, LE);
-    for (let j = 14; j-- > 0;) {
-      view.setBigUint64(i * 8, view.getBigUint64(i * 8, LE) * 26n + BigInt(s.charCodeAt(i * 14 + j)) - BigInt('A'.charCodeAt(0)), LE);
+    if (new RegExp(`^[a-z]{${4 * 14}}$`).test(s) === false) {
+        throw new Error(`Invalid string. Expected ${4 * 14} lowercase latin chars.`);
     }
-  }
 
-  return bytes;
+    s = s.toUpperCase();
+
+    const bytes = new Uint8Array(32);
+    const view = new DataView(bytes.buffer, bytes.byteOffset);
+
+    for (let i = 0; i < 4; i++) {
+        view.setBigUint64(i * 8, 0n, LE);
+        for (let j = 14; j-- > 0;) {
+        view.setBigUint64(i * 8, view.getBigUint64(i * 8, LE) * 26n + BigInt(s.charCodeAt(i * 14 + j)) - BigInt('A'.charCodeAt(0)), LE);
+        }
+    }
+
+    return bytes;
 };
 
 export const bytes64ToString = function (bytes) {
-  if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
-    throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
-  }
-  if (bytes.byteLength !== 64) {
-    throw new RangeError('Invalid byte length.');
-  }
+    if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
+        throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
+    }
+    if (bytes.byteLength !== 64) {
+        throw new RangeError('Invalid byte length.');
+    }
 
-  return bytes32ToString(bytes.subarray(0, 32)) + bytes32ToString(bytes.subarray(32, 64));
+    return bytes32ToString(bytes.subarray(0, 32)) + bytes32ToString(bytes.subarray(32, 64));
 }
 
 export const stringToBytes64 = function (s) {
-  if (new RegExp(`^[a-z]{${4 * 14 * 2}}$`).test(s) === false) {
-    throw new Error(`Invalid string. Expected ${4 * 14 * 2} lowercase latin chars.`);
-  }
+    if (new RegExp(`^[a-z]{${4 * 14 * 2}}$`).test(s) === false) {
+        throw new Error(`Invalid string. Expected ${4 * 14 * 2} lowercase latin chars.`);
+    }
 
-  const bytes = new Uint8Array(64);
-  bytes.set(stringToBytes32(s.slice(0, 4 * 14)), 0);
-  bytes.set(stringToBytes32(s.slice(4 * 14, 4 * 14 * 2)), 32);
-  return bytes;
-}
+    const bytes = new Uint8Array(64);
+    bytes.set(stringToBytes32(s.slice(0, 4 * 14)), 0);
+    bytes.set(stringToBytes32(s.slice(4 * 14, 4 * 14 * 2)), 32);
+    return bytes;
+    }
 
-const checksum = async function (publicKey) {
-  const buffer = new Uint8Array(4);
-  await crypto.K12(publicKey.slice(), buffer, 4);
+    const checksum = async function (publicKey) {
+    const buffer = new Uint8Array(4);
+    await crypto.K12(publicKey.slice(), buffer, 4);
 
-  let checksum = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0, LE) & 0x3FFFF;
-  let s = '';
+    let checksum = new DataView(buffer.buffer, buffer.byteOffset).getUint32(0, LE) & 0x3FFFF;
+    let s = '';
 
-  for (let i = 0; i < 4; i++) {
-    s += String.fromCharCode(checksum % 26 + 'A'.charCodeAt(0));
-    checksum /= 26;
-  }
+    for (let i = 0; i < 4; i++) {
+        s += String.fromCharCode(checksum % 26 + 'A'.charCodeAt(0));
+        checksum /= 26;
+    }
 
-  return s;
+    return s;
 };
 
 export const bytesToId = async function (bytes) {
-  return bytes32ToString(bytes).toUpperCase() + (await checksum(bytes));
+    return bytes32ToString(bytes).toUpperCase() + (await checksum(bytes));
 };
 
 export const idToBytes = async function (s) {
-  if (new RegExp(`^[A-Z]{${60}}$`).test(s) === false) {
-    throw new Error('Invalid id. Expected 60 uppercase latin chars.');
-  }
+    if (new RegExp(`^[A-Z]{${60}}$`).test(s) === false) {
+        throw new Error('Invalid id. Expected 60 uppercase latin chars.');
+    }
 
-  const bytes = stringToBytes32(s.slice(0, 56).toLowerCase());
+    const bytes = stringToBytes32(s.slice(0, 56).toLowerCase());
 
-  if ((await checksum(bytes)) !== s.slice(56, 60)) {
-    throw new Error('Invalid checksum!');
-  }
+    if ((await checksum(bytes)) !== s.slice(56, 60)) {
+        throw new Error('Invalid checksum!');
+    }
 
-  return bytes;
+    return bytes;
 };
 
-export const NULL_ID_STRING = 'a'.repeat(60);
+export const NULL_ID_STRING = bytesToId(new Uint8Array(crypto.PUBLIC_KEY_LENGTH).fill(0));
 
 export const digestBytesToString = bytes32ToString;
 
@@ -202,38 +202,63 @@ const HEX_ALPHABET = '0123456789abcdef';
 const SHIFTED_HEX_ALPHABET = 'abcdefghijklmnop';
 
 export const shiftedHexToBytes = function (s) {
-  if (/[a-p]/.test(s) === false) {
-    throw new TypeError('Invalid shifted hex string.');
-  }
+    if (/[a-p]/.test(s) === false) {
+        throw new TypeError('Invalid shifted hex string.');
+    }
 
-  if (s.length % 2 !== 0) {
-    s = 'a' + s;
-  }
+    if (s.length % 2 !== 0) {
+        s = 'a' + s;
+    }
 
-  const bytes = new Uint8Array(s.length / 2);
-  for (let i = 0, j = 0; j < s.length; j += 2) {
-    bytes[i++] = parseInt(s.substr(j, 2).split('').map((char) => HEX_ALPHABET[SHIFTED_HEX_ALPHABET.indexOf(char)]).join(''), 16);
-  }
-  return bytes;
+    const bytes = new Uint8Array(s.length / 2);
+    for (let i = 0, j = 0; j < s.length; j += 2) {
+        bytes[i++] = parseInt(s.substr(j, 2).split('').map((char) => HEX_ALPHABET[SHIFTED_HEX_ALPHABET.indexOf(char)]).join(''), 16);
+    }
+    return bytes;
 };
 
 export const bytesToShiftedHex = function (bytes) {
-  if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
-    throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
-  }
+    if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
+        throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
+    }
 
-  let s = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    s += SHIFTED_HEX_CHARS[bytes[i] >> 4] + SHIFTED_HEX_CHARS[bytes[i] & 15];
-  }
-  return s;
+    let s = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+        s += SHIFTED_HEX_CHARS[bytes[i] >> 4] + SHIFTED_HEX_CHARS[bytes[i] & 15];
+    }
+    return s;
+};
+
+export const stringToBytes = function (s) {
+    const bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) {
+        bytes[i] = ALPHABET.indexOf(s[i].toLowerCase()) + 'A'.charCodeAt(0);
+    }
+    return bytes;
+};
+
+export const bytesToString = function (bytes) {
+    if (Object.prototype.toString.call(bytes) !== '[object Uint8Array]') {
+        throw new TypeError('Invalid bytes. Ecpected Uint8Array.');
+    }
+
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) {
+        if ((bytes[i] - 'A'.charCodeAt(0)) >= ALPHABET.length) {
+            throw new RangeError('Invalid bytes. Expected bytes in [0, 25] range.');
+        }
+        if (bytes[i] >= 'A'.charCodeAt(0)) {
+            s += ALPHABET[Math.max(0, bytes[i] - 'A'.charCodeAt(0))].toUpperCase();
+        }
+    }
+    return s;
 };
 
 export const stringToSeedBytes = function (s) {
-  const bytes = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) {
-    bytes[i] = ALPHABET.indexOf(s[i]);
-  }
-  s = undefined;
-  return bytes;
+    const bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) {
+        bytes[i] = ALPHABET.indexOf(s[i]);
+    }
+    s = undefined;
+    return bytes;
 }

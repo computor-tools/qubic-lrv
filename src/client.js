@@ -59,6 +59,8 @@ import {
     NUMBER_OF_COMPUTORS,
     QUORUM,
     SPECTRUM_DEPTH,
+    ASSETS_DEPTH,
+    ASSET_TYPES,
     MAX_NUMBER_OF_TICKS_PER_EPOCH,
     TARGET_TICK_DURATION,
     TICK_TRANSACTIONS_PUBLICATION_OFFSET,
@@ -78,6 +80,10 @@ import {
     createMessage,
     createTransceiver,
     MIN_NUMBER_OF_PUBLIC_PEERS,
+    REQUEST_OWNED_ASSETS,
+    RESPOND_OWNED_ASSETS,
+    REQUEST_ISSUED_ASSETS,
+    RESPOND_ISSUED_ASSETS,
 } from './transceiver.js';
 import {
     bytes64ToString,
@@ -90,6 +96,7 @@ import {
     NULL_ID_STRING,
     shiftedHexToBytes,
     bytesToShiftedHex,
+    bytesToString,
 } from './converter.js';
 import { isZero, equal, createLock, IS_BROWSER } from './utils.js';
 import { createPrivateKey, createId, SEED_LENGTH } from './id.js';
@@ -137,6 +144,9 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
         const entities = new Map();
         const entitiesByTick = new Map();
+
+        const assetsByTick = new Map();
+        const issuersByTick = new Map();
 
         const tickLock = createLock();
 
@@ -204,6 +214,29 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
             message.set(entity.publicKey, REQUEST_ENTITY.PUBLIC_KEY_OFFSET);
             message.randomizeDezavu();
             peer.transmit(message);
+        };
+
+        const requestOwnedAssets = function (peer, ownerPublicKey) {
+            const message = createMessage(REQUEST_OWNED_ASSETS.TYPE);
+            message.set(ownerPublicKey, REQUEST_OWNED_ASSETS.PUBLIC_KEY_OFFSET);
+            message.randomizeDezavu();
+            peer.transmit(message);
+        };
+
+        const requestIssuedAssetsIfNeeded = async function (peer, issuerId, tick) {
+            let issuers = issuersByTick.get(tick);
+            if (!issuers) {
+                issuers = new Map();
+                issuersByTick.set(tick, issuers);
+            }
+
+            if (!issuers.has(issuerId)) {
+                issuers.set(issuerId, []);
+                const message = createMessage(REQUEST_ISSUED_ASSETS.TYPE);
+                message.set(await idToBytes(issuerId), REQUEST_ISSUED_ASSETS.PUBLIC_KEY_OFFSET);
+                message.randomizeDezavu();
+                peer.transmit(message);
+            }
         };
 
         const detectQuorumTick = async function (tick, nextQuorumTick) {
@@ -502,7 +535,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
         
                                         ...(outgoingTransaction ?  { outgoingTransaction } : {}),
                                     }));
-        
+
                                     if ((entity.outgoingTransaction === undefined || entity.outgoingTransaction.tick <= system.tick) && entity.emitter) {
                                         entity.emitter.emit('execution_tick', system.tick + TICK_TRANSACTIONS_PUBLICATION_OFFSET + Math.ceil(averageQuorumTickProcessingDuration / TARGET_TICK_DURATION) + 1);
                                     }
@@ -523,6 +556,85 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         }
                     }
                 }
+
+                if (assetsByTick.has(quorumTick.tick)) {
+                    for (const tickAssets of assetsByTick.get(quorumTick.tick).values()) {
+                        for (const respondedAsset of tickAssets) {
+                            const entity = entities.get(respondedAsset.ownership.ownerId);
+
+                            if (entity !== undefined) {
+                                if (isZero(respondedAsset.universeDigest) && !isZero(respondedAsset.siblings)) {
+                                    await crypto.merkleRoot(ASSETS_DEPTH, respondedAsset.universeIndex, respondedAsset.data, respondedAsset.siblings, respondedAsset.universeDigest);
+                                }
+
+                                if (digestBytesToString(respondedAsset.universeDigest) === nextQuorumTick.prevUniverseDigest) {
+                                    const issuers = issuersByTick.get(quorumTick.tick)?.get(respondedAsset.issuance.issuerId);
+                                    if (issuers.length > 0) {
+                                        for (const issuance of issuers) {
+                                            if (issuance.universeIndex === respondedAsset.ownership.issuanceIndex) {
+                                                if (isZero(issuance.universeDigest) && !isZero(issuance.siblings)) {
+                                                    await crypto.merkleRoot(ASSETS_DEPTH, issuance.universeIndex, issuance.data, issuance.siblings, issuance.universeDigest);
+                                                }
+
+                                                if (digestBytesToString(issuance.universeDigest) === nextQuorumTick.prevUniverseDigest) {
+                                                    if (assetsByTick.has(quorumTick.tick)) {
+                                                        assetsByTick.get(quorumTick.tick).delete(respondedAsset.ownership.ownerId);
+                                                        if (assetsByTick.get(quorumTick.tick).size === 0) {
+                                                            assetsByTick.delete(quorumTick.tick);
+                                                            issuersByTick.delete(quorumTick.tick);
+                                                        }
+                                                    }
+
+                                                    const digest = new Uint8Array(crypto.DIGEST_LENGTH);
+                                                    await crypto.K12(respondedAsset.data, digest, crypto.DIGEST_LENGTH);
+                                                    const ownershipDigest = digestBytesToString(digest);
+
+                                                    await crypto.K12(issuance.data, digest, crypto.DIGEST_LENGTH);
+                                                    const issuanceDigest = digestBytesToString(digest);
+
+                                                    that.emit('asset', Object.freeze({
+                                                        ownership: Object.freeze(respondedAsset.ownership),
+                                                        issuance: Object.freeze({
+                                                            issuerId: issuance.issuerId,
+                                                            type: issuance.type,
+                                                            name: issuance.name,
+                                                            numberOfDecimalPlaces: issuance.numberOfDecimalPlaces,
+                                                            unitOfMeasurement: Object.freeze(issuance.unitOfMeasurement),
+
+                                                            digest: issuanceDigest,
+                                                            siblings: Object.freeze(Array(ASSETS_DEPTH).fill('').map((_, i) => digestBytesToString(issuance.siblings.subarray(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH)))),
+                                                            universeIndex: issuance.universeIndex,
+                                                            universeDigest: nextQuorumTick.prevUniverseDigest,
+                                                        }),
+
+                                                        tick: quorumTick.tick,
+                                                        epoch: quorumTick.epoch,
+                                                        timestamp: quorumTick.timestamp,
+
+                                                        digest: ownershipDigest,
+                                                        siblings: Object.freeze(Array(ASSETS_DEPTH).fill('').map((_, i) => digestBytesToString(respondedAsset.siblings.subarray(i * crypto.DIGEST_LENGTH, (i + 1) * crypto.DIGEST_LENGTH)))),
+                                                        universeIndex: respondedAsset.universeIndex,
+                                                        universeDigest: nextQuorumTick.prevUniverseDigest,
+                                                    }));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    break;
+                                }
+                            }
+
+                            if (!assetsByTick.get(quorumTick.tick).has(respondedAsset.ownership.ownerId)) {
+                                break;
+                            }
+                        }
+
+                        if (!assetsByTick.has(quorumTick.tick)) {
+                            break;
+                        }
+                    }
+                }
             }
         };
 
@@ -539,7 +651,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         const receivedComputors = {
                             epoch: messageView.getUint16(BROADCAST_COMPUTORS.EPOCH_OFFSET, true),
                             computorPublicKeys: new Array(NUMBER_OF_COMPUTORS).fill(new Uint8Array(crypto.PUBLIC_KEY_LENGTH)),
-                            computorPublicKeyStrings: new Array(NUMBER_OF_COMPUTORS).fill(NULL_ID_STRING),
+                            computorIds: new Array(NUMBER_OF_COMPUTORS).fill(NULL_ID_STRING),
 
                             digest: new Uint8Array(crypto.DIGEST_LENGTH),
                             signature: message.subarray(BROADCAST_COMPUTORS.SIGNATURE_OFFSET),
@@ -561,8 +673,8 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     const checkpointBytesView = new DataView(checkpointBytes.buffer, checkpointBytes.byteOffset);
                                     const checkpoint = {
                                         epoch: CHECKPOINT.epoch,
-                                        computorPublicKeys: checkpointBytes.slice(BROADCAST_COMPUTORS.EPOCH_LENGTH),
-                                        computorPublicKeyStrings: CHECKPOINT.computorPublicKeys,
+                                        computorPublicKeys: await Promise.all(CHECKPOINT.computorIds.map(id => idToBytes(id))),
+                                        computorIds: CHECKPOINT.computorIds,
 
                                         digest: new Uint8Array(crypto.DIGEST_LENGTH),
                                         signature: stringToBytes64(CHECKPOINT.signature),
@@ -572,13 +684,25 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                     checkpointBytesView.setUint16(0, CHECKPOINT.epoch, true);
                                     for (let i = 0, offset = BROADCAST_COMPUTORS.EPOCH_LENGTH; i < NUMBER_OF_COMPUTORS; i++, offset += crypto.PUBLIC_KEY_LENGTH) {
-                                        checkpointBytes.set(await idToBytes(CHECKPOINT.computorPublicKeys[i]), offset);
+                                        checkpointBytes.set(checkpoint.computorPublicKeys[i], offset);
                                     }
 
                                     await crypto.K12(checkpointBytes, checkpoint.digest, crypto.DIGEST_LENGTH);
 
                                     if (await crypto.verify(await ARBITRATOR_BYTES, checkpoint.digest, checkpoint.signature)) {
                                         epochs.set((system.epoch = CHECKPOINT.epoch), checkpoint);
+
+                                        that.emit('epoch', Object.freeze({
+                                            epoch: checkpoint.epoch,
+                                            computorIds: Object.freeze(checkpoint.computorIds),
+
+                                            digest: digestBytesToString(checkpoint.digest),
+                                            signature: CHECKPOINT.signature,
+                                        }));
+
+                                        if (quorumTickRequestingInterval === undefined && currentTickInfoRequestingInterval === undefined) {
+                                            requestCurrentTickInfo(peer);
+                                        }
                                     } else {
                                         throw new Error('Invalid checkpoint signature!');
                                     }
@@ -599,7 +723,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                                 let numberOfReplacedComputors = 0;
 
                                                 for (let j = 0; j < NUMBER_OF_COMPUTORS; j++) {
-                                                    if (epochs.get(i + 1).computorPublicKeyStrings.indexOf(epochs.get(i).computorPublicKeyStrings[j]) === -1) {
+                                                    if (epochs.get(i + 1).computorIds.indexOf(epochs.get(i).computorIds[j]) === -1) {
                                                         if (++numberOfReplacedComputors > NUMBER_OF_COMPUTORS - QUORUM) {
                                                             system.epoch = 0x10000;
                                                             that.emit('error', new Error(`Illegal number of replaced computors! (epoch ${i + 1}). Replace arbitrator.`));
@@ -615,7 +739,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
 
                                                 that.emit('epoch', Object.freeze({
                                                     epoch: epoch.epoch,
-                                                    computorPublicKeys: Object.freeze(epoch.computorPublicKeyStrings),
+                                                    computorIds: Object.freeze(epoch.computorIds),
 
                                                     digest: digestBytesToString(epoch.digest),
                                                     signature: bytes64ToString(epoch.signature),
@@ -634,7 +758,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                                     if (receivedComputors.epoch > system.epoch) {
                                         for (let i = 0, offset = BROADCAST_COMPUTORS.PUBLIC_KEYS_OFFSET; i < NUMBER_OF_COMPUTORS; i++) {
                                             receivedComputors.computorPublicKeys[i] = message.slice(offset, (offset += crypto.PUBLIC_KEY_LENGTH));
-                                            receivedComputors.computorPublicKeyStrings[i] = await bytesToId(receivedComputors.computorPublicKeys[i]);
+                                            receivedComputors.computorIds[i] = await bytesToId(receivedComputors.computorPublicKeys[i]);
                                         }
                                         epochs.set(receivedComputors.epoch, receivedComputors);
 
@@ -780,6 +904,7 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         if (tickHint > system.tick) {
                             entities.forEach(function (entity) {
                                 requestEntity(peer, entity);
+                                requestOwnedAssets(peer, entity.publicKey);
                             });
 
                             clearInterval(currentTickInfoRequestingInterval);
@@ -863,10 +988,109 @@ export const createClient = function (numberOfStoredTicks = MAX_NUMBER_OF_TICKS_
                         peer.ignore();
                     }
                     break;
+
+                case RESPOND_ISSUED_ASSETS.TYPE:
+                    if (message.length === RESPOND_ISSUED_ASSETS.LENGTH) {
+                        const messageView = new DataView(message.buffer, message.byteOffset);
+                        const respondedAsset = {
+                            issuerId: await bytesToId(message.subarray(RESPOND_ISSUED_ASSETS.ISSUANCE_PUBLIC_KEY_OFFSET, RESPOND_ISSUED_ASSETS.ISSUANCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH)),
+                            type: message[RESPOND_ISSUED_ASSETS.ISSUANCE_TYPE_OFFSET],
+                            name: bytesToString(message.subarray(RESPOND_ISSUED_ASSETS.NAME_OFFSET, RESPOND_ISSUED_ASSETS.NAME_OFFSET + RESPOND_ISSUED_ASSETS.NAME_LENGTH)),
+                            numberOfDecimalPlaces: message[RESPOND_ISSUED_ASSETS.NUMBER_OF_DECIMAL_PLACES_OFFSET],
+                            unitOfMeasurement: Array.from(message.slice(RESPOND_ISSUED_ASSETS.UNIT_OF_MEASUREMENT_OFFSET, RESPOND_ISSUED_ASSETS.UNIT_OF_MEASUREMENT_OFFSET + RESPOND_OWNED_ASSETS.UNIT_OF_MEASUREMENT_LENGTH)),
+
+                            tick: messageView.getUint32(RESPOND_ISSUED_ASSETS.TICK_OFFSET, true),
+                            universeIndex: messageView.getUint32(RESPOND_ISSUED_ASSETS.UNIVERSE_INDEX_OFFSET, true),
+                            siblings: message.subarray(RESPOND_ISSUED_ASSETS.SIBLINGS_OFFSET, RESPOND_ISSUED_ASSETS.SIBLINGS_OFFSET + ASSETS_DEPTH * crypto.DIGEST_LENGTH),
+
+                            data: message.slice(RESPOND_ISSUED_ASSETS.ISSUANCE_PUBLIC_KEY_OFFSET, RESPOND_ISSUED_ASSETS.UNIT_OF_MEASUREMENT_OFFSET + RESPOND_ISSUED_ASSETS.UNIT_OF_MEASUREMENT_LENGTH),
+                            universeDigest: new Uint8Array(crypto.DIGEST_LENGTH),
+
+                            peer,
+                        };
+
+                        await tickLock.acquire();
+
+                        if (respondedAsset.universeIndex > -1) {
+                            if (respondedAsset.type === ASSET_TYPES.ISSUANCE) {
+                                const issuers = issuersByTick.get(respondedAsset.tick);
+                                if (issuers !== undefined) {
+                                    const assets = issuers.get(respondedAsset.issuerId);
+                                    if (assets !== undefined) {
+                                        assets.push(respondedAsset);
+                                    }
+                                }
+                            }
+                        }
+
+                        tickLock.release();
+                    }
+                    break;
+
+                case RESPOND_OWNED_ASSETS.TYPE:
+                    if (message.length === RESPOND_OWNED_ASSETS.LENGTH) {
+                        const messageView = new DataView(message.buffer, message.byteOffset);
+
+                        const respondedAsset = {
+                            ownership: {
+                                ownerId: await bytesToId(message.subarray(RESPOND_OWNED_ASSETS.OWNERSHIP_PUBLIC_KEY_OFFSET, RESPOND_OWNED_ASSETS.OWNERSHIP_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH)),
+                                type: message[RESPOND_OWNED_ASSETS.OWNERSHIP_TYPE_OFFSET],
+                                managingContractIndex: messageView.getUint16(RESPOND_OWNED_ASSETS.OWNERSHIP_MANAGING_CONTRACT_INDEX_OFFSET, true),
+                                issuanceIndex: messageView.getUint32(RESPOND_OWNED_ASSETS.ISSUANCE_INDEX_OFFSET, true),
+                                numberOfShares: messageView.getBigUint64(RESPOND_OWNED_ASSETS.NUMBER_OF_OWNED_SHARES_OFFSET, true),
+                            },
+                            issuance: {
+                                issuerId: await bytesToId(message.subarray(RESPOND_OWNED_ASSETS.ISSUANCE_PUBLIC_KEY_OFFSET, RESPOND_OWNED_ASSETS.ISSUANCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH)),
+                                type: message[RESPOND_OWNED_ASSETS.ISSUANCE_TYPE_OFFSET],
+                                name: bytesToString(message.subarray(RESPOND_OWNED_ASSETS.NAME_OFFSET, RESPOND_OWNED_ASSETS.NAME_OFFSET + RESPOND_OWNED_ASSETS.NAME_LENGTH)),
+                                numberOfDecimalPlaces: message[RESPOND_OWNED_ASSETS.NUMBER_OF_DECIMAL_PLACES_OFFSET],
+                                unitOfMeasurement: Array.from(message.slice(RESPOND_OWNED_ASSETS.UNIT_OF_MEASUREMENT_OFFSET, RESPOND_OWNED_ASSETS.UNIT_OF_MEASUREMENT_OFFSET + RESPOND_OWNED_ASSETS.UNIT_OF_MEASUREMENT_LENGTH)),
+                            },
+
+                            tick: messageView.getUint32(RESPOND_OWNED_ASSETS.TICK_OFFSET, true),
+                            universeIndex: messageView.getUint32(RESPOND_OWNED_ASSETS.UNIVERSE_INDEX_OFFSET, true),
+                            siblings: message.subarray(RESPOND_OWNED_ASSETS.SIBLINGS_OFFSET, RESPOND_OWNED_ASSETS.SIBLINGS_OFFSET + ASSETS_DEPTH * crypto.DIGEST_LENGTH),
+
+                            data: message.slice(RESPOND_OWNED_ASSETS.OWNERSHIP_PUBLIC_KEY_OFFSET, RESPOND_OWNED_ASSETS.NUMBER_OF_OWNED_SHARES_OFFSET + RESPOND_OWNED_ASSETS.NUMBER_OF_SHARES_LENGTH),
+                            universeDigest: new Uint8Array(crypto.DIGEST_LENGTH),
+
+                            peer,
+                        };
+
+                        await tickLock.acquire();
+
+                        if (respondedAsset.universeIndex > -1) {
+                            if (respondedAsset.issuance.type === ASSET_TYPES.ISSUANCE && respondedAsset.ownership.type === ASSET_TYPES.OWNERSHIP) {
+                                if (entities.has(respondedAsset.ownership.ownerId)) {
+                                    let tickAssets = assetsByTick.get(respondedAsset.tick);
+                                    if (tickAssets === undefined) {
+                                        tickAssets = new Map();
+                                        assetsByTick.set(respondedAsset.tick, tickAssets);
+                                    }
+
+                                    if (!tickAssets.has(respondedAsset.ownership.ownerId)) {
+                                        tickAssets.set(respondedAsset.ownership.ownerId, []);
+                                    }
+                                    tickAssets.get(respondedAsset.ownership.ownerId).push(respondedAsset);
+
+                                    requestIssuedAssetsIfNeeded(peer, respondedAsset.issuance.issuerId, respondedAsset.tick);
+
+                                    await verify(respondedAsset.tick,  peer);
+                                }
+                            }
+                        }
+
+                        tickLock.release();
+
+                    } else {
+                        peer.ignore();
+                    }
+                    break;
             }
         };
 
         const transceiver = createTransceiver(receiveCallback);
+        transceiver.addListener('network', network => that.emit('network', network));
 
         const _broadcastTransaction = function (transactionBytes) {
             const message = createMessage(BROADCAST_TRANSACTION.TYPE, transactionBytes.length);

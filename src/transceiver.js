@@ -50,8 +50,10 @@ THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict'
 
+import { EventEmitter } from 'events';
+
 import crypto from 'qubic-crypto';
-import { NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH } from './constants.js';
+import { ASSETS_DEPTH, NUMBER_OF_COMPUTORS, SPECTRUM_DEPTH } from './constants.js';
 import { TRANSACTION } from './transaction.js';
 
 const CORE_PORT = 21841;
@@ -443,7 +445,7 @@ export const REQUEST_ISSUED_ASSETS = {
     },
 };
 
-export const RESPOND_ISSUED_ASSETS = {
+export const RESPOND_ISSUED_ASSETS = Object.freeze({
     TYPE: 37,
 
     ISSUANCE_PUBLIC_KEY_OFFSET: 0,
@@ -485,12 +487,18 @@ export const RESPOND_ISSUED_ASSETS = {
     },
     TICK_LENGTH: BROADCAST_TICK.TICK_LENGTH,
 
-    // TODO: Add siblings
-
-    get LENGTH() {
+    get UNIVERSE_INDEX_OFFSET() {
         return this.TICK_OFFSET + this.TICK_LENGTH;
     },
-};
+    UNIVERSE_INDEX_LENGTH: 4,
+    get SIBLINGS_OFFSET() {
+        return this.UNIVERSE_INDEX_OFFSET + this.UNIVERSE_INDEX_LENGTH;
+    },
+
+    get LENGTH() {
+        return this.SIBLINGS_OFFSET + ASSETS_DEPTH * crypto.DIGEST_LENGTH;
+    },
+});
 
 export const REQUEST_OWNED_ASSETS = {
     TYPE: 38,
@@ -502,17 +510,15 @@ export const REQUEST_OWNED_ASSETS = {
     },
 };
 
-export const RESPOND_OWNED_ASSETS = {
-    ...RESPOND_ISSUED_ASSETS,
-
+export const RESPOND_OWNED_ASSETS = Object.freeze({
     TYPE: 39,
 
-    get OWNERSHIP_PUBLIC_KEY_OFFSET() {
-        return this.UNIT_OF_MEASUREMENT_OFFSET + this.UNIT_OF_MEASUREMENT_LENGTH;
-    },
+    OWNERSHIP_PUBLIC_KEY_OFFSET: 0,
     get OWNERSHIP_TYPE_OFFSET() {
         return this.OWNERSHIP_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
     },
+    TYPE_LENGTH: 1,
+
     get OWNERSHIP_MANAGING_CONTRACT_INDEX_OFFSET() {
         return this.OWNERSHIP_TYPE_OFFSET + this.TYPE_LENGTH + 1 // padding;
     },
@@ -526,19 +532,46 @@ export const RESPOND_OWNED_ASSETS = {
     },
     NUMBER_OF_SHARES_LENGTH: 8,
 
-    get TICK_OFFSET() {
+    get ISSUANCE_PUBLIC_KEY_OFFSET() {
         return this.NUMBER_OF_OWNED_SHARES_OFFSET + this.NUMBER_OF_SHARES_LENGTH;
+    },
+
+    get ISSUANCE_TYPE_OFFSET() {
+        return this.ISSUANCE_PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
+    },
+    get NAME_OFFSET() {
+        return this.ISSUANCE_TYPE_OFFSET + this.TYPE_LENGTH;
+    },
+    NAME_LENGTH: 7,
+    get NUMBER_OF_DECIMAL_PLACES_OFFSET() {
+        return this.NAME_OFFSET + this.NAME_LENGTH;
+    },
+    NUMBER_OF_DECIMAL_PLACES_LENGTH: 1,
+
+    get UNIT_OF_MEASUREMENT_OFFSET() {
+        return this.NUMBER_OF_DECIMAL_PLACES_OFFSET + this.NUMBER_OF_DECIMAL_PLACES_LENGTH;
+    },
+    UNIT_OF_MEASUREMENT_LENGTH: 7,
+
+    get TICK_OFFSET() {
+        return this.UNIT_OF_MEASUREMENT_OFFSET + this.UNIT_OF_MEASUREMENT_LENGTH;
     },
     TICK_LENGTH: BROADCAST_TICK.TICK_LENGTH,
 
-    // TODO: Add siblings
-
-    get LENGTH() {
+    get UNIVERSE_INDEX_OFFSET() {
         return this.TICK_OFFSET + this.TICK_LENGTH;
     },
-};
+    UNIVERSE_INDEX_LENGTH: 4,
+    get SIBLINGS_OFFSET() {
+        return this.UNIVERSE_INDEX_OFFSET + this.UNIVERSE_INDEX_LENGTH;
+    },
 
-export const REQUEST_POSSESSED_ASSETS = {
+    get LENGTH() {
+        return this.SIBLINGS_OFFSET + ASSETS_DEPTH * crypto.DIGEST_LENGTH;
+    },
+});
+
+export const REQUEST_POSSESSED_ASSETS = Object.freeze({
     TYPE: 40,
 
     PUBLIC_KEY_OFFSET: 0,
@@ -546,10 +579,10 @@ export const REQUEST_POSSESSED_ASSETS = {
     get LENGTH() {
         return this.PUBLIC_KEY_OFFSET + crypto.PUBLIC_KEY_LENGTH;
     },
-};
+});
 
 
-export const RESPOND_POSSESSED_ASSETS = {
+export const RESPOND_POSSESSED_ASSETS = Object.freeze({
     ...RESPOND_OWNED_ASSETS,
 
     TYPE: 41,
@@ -582,7 +615,7 @@ export const RESPOND_POSSESSED_ASSETS = {
     get LENGTH() {
         return this.TICK_OFFSET + this.TICK_LENGTH;
     },
-};
+});
 
 export const REQUEST_CONTRACT_FUNCTION = {
     TYPE: 42,
@@ -709,359 +742,366 @@ export const createMessage = function (type, contentSize) {
 };
 
 export const createTransceiver = function (receiveCallback) {
-    const publicPeers = {
-        [COMMUNICATION_PROTOCOLS.TCP]: [],
-    };
-    const peers = {
-        [COMMUNICATION_PROTOCOLS.TCP]: [],
-    };
-    const ignoredPeers = new Set();
-    const initialPeers = new Set();
-    const initialHandshakingPeers = new Set();
-    const initiallyExchangedPeers = [];
-    let initialHandshakesDone = false;
+    return function () {
+        const that = this;
+        const publicPeers = {
+            [COMMUNICATION_PROTOCOLS.TCP]: [],
+        };
+        const peers = {
+            [COMMUNICATION_PROTOCOLS.TCP]: [],
+        };
+        const ignoredPeers = new Set();
+        const initialPeers = new Set();
+        const numberOfDiscoveredPeersByAddress = new Map();
+        let initialHandshakesDone = false;
 
-    let numberOfPeers = 0;
+        let numberOfPeers = 0;
 
-    const setPublicPeers = function (message, peer) {
-        for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
-            const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
+        const _receiveCallback = function (type, message, peer) {
+            switch (peer.protocol) {
+                case COMMUNICATION_PROTOCOLS.TCP:
+                    switch (type) {
+                        case EXCHANGE_PUBLIC_PEERS.TYPE:
+                            let numberOfNewPeers = 0;
 
-            if (receivedAddress !== '0.0.0.0' && !ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
-                if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
-                    publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
-                } else {
-                    publicPeers[peer.protocol].push(receivedAddress);
+                            for (let offset = EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET; offset < EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_OFFSET + EXCHANGE_PUBLIC_PEERS.EXCHANGED_PEERS_LENGTH; offset += EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH) {
+                                const receivedAddress = message.slice(offset, offset + EXCHANGE_PUBLIC_PEERS.ADDRESS_LENGTH).join('.');
+
+                                let numberOfDiscoveredPeers = numberOfDiscoveredPeersByAddress.get(receivedAddress) || 0;
+                                if (numberOfDiscoveredPeers < EXCHANGE_PUBLIC_PEERS.NUMBER_OF_EXCHANGED_PEERS) {
+                                    if (receivedAddress !== '0.0.0.0' && !ignoredPeers.has(receivedAddress) && publicPeers[peer.protocol].indexOf(receivedAddress) === -1 && peers[peer.protocol].findIndex(({ address }) => address === receivedAddress) === -1) {
+                                        numberOfDiscoveredPeersByAddress.set(receivedAddress, ++numberOfDiscoveredPeers);
+                                        numberOfNewPeers++;
+
+                                        if (publicPeers[peer.protocol].length === MAX_NUMBER_OF_PUBLIC_PEERS) {
+                                            publicPeers[peer.protocol][Math.floor(Math.random() * MAX_NUMBER_OF_PUBLIC_PEERS)] = receivedAddress;
+                                        } else {
+                                            publicPeers[peer.protocol].push(receivedAddress);
+                                        }
+
+                                        if (initialPeers.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
+                                            initialPeers.add(receivedAddress);
+
+                                            if (initialPeers.size === MIN_NUMBER_OF_PUBLIC_PEERS) {
+                                                initialHandshakesDone = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            break;
+                    }
+                    break;
+            }
+
+            if (initialHandshakesDone) {
+                if (typeof receiveCallback === 'function') {
+                    receiveCallback(type, message, peer);
                 }
             }
-        }
-    };
+        };
 
-    const _receiveCallback = function (type, message, peer) {
-        switch (peer.protocol) {
-            case COMMUNICATION_PROTOCOLS.TCP:
-                switch (type) {
-                    case EXCHANGE_PUBLIC_PEERS.TYPE:
-                        if (initialHandshakingPeers.size < MIN_NUMBER_OF_PUBLIC_PEERS && initialPeers.has(peer.address) && !initialHandshakingPeers.has(peer.address)) {
-                            initialHandshakingPeers.add(peer.address);
+        const _connect = async function ({ protocol, address, port, rotationPeriod }, peerIndex) {
+            let socket;
+            let rotationTimeout;
+            let shouldReconnect = true;
 
-                            if (!initialHandshakesDone) {
-                                initiallyExchangedPeers.push({ message, peer });
-                            } else {
-                                setPublicPeers(message, peer);
-                            }
+            const transmit = function (message) {
+                switch (protocol) {
+                    case COMMUNICATION_PROTOCOLS.TCP:
+                        if (socket !== undefined && socket.readyState === 'open') {
+                            socket.write(message.transmissionBytes);
                         }
                         break;
                 }
-                break;
-        }
+            };
 
-        if (!initialHandshakesDone) {
-            if (type === EXCHANGE_PUBLIC_PEERS.TYPE) {
-                if (initialHandshakingPeers.size === MIN_NUMBER_OF_PUBLIC_PEERS) {
-                    if (typeof receiveCallback === 'function') {
-                        for (let i = 0; i < initiallyExchangedPeers.length; i++) {
-                            receiveCallback(EXCHANGE_PUBLIC_PEERS.TYPE, initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
-                            setPublicPeers(initiallyExchangedPeers[i].message, initiallyExchangedPeers[i].peer);
-                        }
-                    }
-                    initialHandshakesDone = true;
-                }
-            }
-        } else if (typeof receiveCallback === 'function') {
-            receiveCallback(type, message, peer);
-        }
-    };
-
-    const _connect = async function ({ protocol, address, port, rotationPeriod }, peerIndex) {
-        let socket;
-        let rotationTimeout;
-        let shouldReconnect = true;
-
-        const transmit = function (message) {
-            switch (protocol) {
-                case COMMUNICATION_PROTOCOLS.TCP:
-                    if (socket !== undefined && socket.readyState === 'open') {
-                        socket.write(message.transmissionBytes);
-                    }
-                    break;
-            }
-        };
-
-        const transmitToOthers = function (message) {
-            for (let anotherProtocol in peers) {
-                if (peers.hasOwnProperty(anotherProtocol)) {
-                    for (const anotherPeer of peers[anotherProtocol]) {
-                        if (anotherPeer.address !== address) {
-                            anotherPeer.transmit(message);
+            const transmitToOthers = function (message) {
+                for (let anotherProtocol in peers) {
+                    if (peers.hasOwnProperty(anotherProtocol)) {
+                        for (const anotherPeer of peers[anotherProtocol]) {
+                            if (anotherPeer.address !== address) {
+                                anotherPeer.transmit(message);
+                            }
                         }
                     }
                 }
-            }
-        };
+            };
 
-        const transmitToAll = function (message) {
-            for (let anotherProtocol in peers) {
-                if (peers.hasOwnProperty(anotherProtocol)) {
-                    const connectedPeers = peers[protocol].filter(anotherPeer => anotherPeer.readyState() === 'open');
-                    for (let i = 0; i < connectedPeers.length; i++) {
-                        connectedPeers[i].transmit(typeof message === 'function' ? message.call({}, i, connectedPeers.length) : message);
+            const transmitToAll = function (message) {
+                for (let anotherProtocol in peers) {
+                    if (peers.hasOwnProperty(anotherProtocol)) {
+                        const connectedPeers = peers[protocol].filter(anotherPeer => anotherPeer.readyState() === 'open');
+                        for (let i = 0; i < connectedPeers.length; i++) {
+                            connectedPeers[i].transmit(typeof message === 'function' ? message.call({}, i, connectedPeers.length) : message);
+                        }
                     }
                 }
-            }
-        };
+            };
 
-        const _disconnect = function (reconnect = false) {
-            clearTimeout(rotationTimeout);
-            shouldReconnect = reconnect;
+            const _disconnect = function (reconnect = false) {
+                clearTimeout(rotationTimeout);
+                shouldReconnect = reconnect;
 
-            switch (protocol) {
-                case COMMUNICATION_PROTOCOLS.TCP:
-                    if (socket !== undefined && !socket.destroyed) {
-                        socket.destroy();
-                    }
-                    break;
-            }
-        };
-
-        const connect = function () {
-            if (socket.destroyed) {
-                if (!ignoredPeers.has(address)) {
-                    publicPeers[protocol].push(address);
-                }
-
-                const anotherAddress = publicPeers[protocol].splice(Math.floor(Math.random() * publicPeers[protocol].length), 1)[0];
-                const i = peers[protocol].findIndex((peer) => peer.address === address);
-                if (peers[protocol][i] !== undefined) {
-                    peers[protocol][i].address = anotherAddress;
-                }
-
-                setTimeout(function () {
-                    _connect({ protocol, port, address: anotherAddress || address, rotationPeriod }, peerIndex);
-                }, 1000);
-            }
-        };
-
-        const _replace = function (forceFlag = false) {
-            if (forceFlag || shouldReconnect) {
-                _disconnect(true);
-                connect();
-            }
-        };
-
-        const ignore = function () {
-            clearTimeout(rotationTimeout);
-
-            switch (protocol) {
-                case COMMUNICATION_PROTOCOLS.TCP:
-                    ignoredPeers.add(socket.address);
-                    socket.destroy();
-                    break;
-            }
-        };
-
-        const remove = function () {
-            _disconnect(false);
-            const index = peers[protocol].findIndex((peer) => peer.address === address);
-            if (index > -1) {
-                peers[protocol].splice(index, 1);
-            }
-        };
-
-        const peer = {
-            get protocol() {
-                return protocol;
-            },
-            get index() {
-                return peerIndex;
-            },
-            readyState() {
                 switch (protocol) {
                     case COMMUNICATION_PROTOCOLS.TCP:
-                        if (socket !== undefined) {
-                            return socket.readyState;
+                        if (socket !== undefined && !socket.destroyed) {
+                            socket.destroy();
                         }
+                        break;
                 }
-            },
-            transmit,
-            transmitToOthers,
-            transmitToAll,
-            disconnect() {
-                _disconnect();
-            },
-            replace() {
-                _replace(true);
-            },
-            ignore,
-            remove,
+            };
+
+            const connect = function () {
+                if (socket.destroyed) {
+                    if (!ignoredPeers.has(address)) {
+                        publicPeers[protocol].push(address);
+                    }
+
+                    const anotherAddress = publicPeers[protocol].splice(Math.floor(Math.random() * publicPeers[protocol].length), 1)[0];
+                    const i = peers[protocol].findIndex((peer) => peer.address === address);
+                    if (peers[protocol][i] !== undefined) {
+                        peers[protocol][i].address = anotherAddress;
+                    }
+
+                    setTimeout(function () {
+                        _connect({ protocol, port, address: anotherAddress || address, rotationPeriod }, peerIndex);
+                    }, 1000);
+                }
+            };
+
+            const _replace = function (forceFlag = false) {
+                if (forceFlag || shouldReconnect) {
+                    _disconnect(true);
+                    connect();
+                }
+            };
+
+            const ignore = function () {
+                clearTimeout(rotationTimeout);
+
+                switch (protocol) {
+                    case COMMUNICATION_PROTOCOLS.TCP:
+                        ignoredPeers.add(socket.address);
+                        socket.destroy();
+                        break;
+                }
+            };
+
+            const remove = function () {
+                _disconnect(false);
+                const index = peers[protocol].findIndex((peer) => peer.address === address);
+                if (index > -1) {
+                    peers[protocol].splice(index, 1);
+                }
+            };
+
+            const peer = {
+                get protocol() {
+                    return protocol;
+                },
+                get index() {
+                    return peerIndex;
+                },
+                readyState() {
+                    switch (protocol) {
+                        case COMMUNICATION_PROTOCOLS.TCP:
+                            if (socket !== undefined) {
+                                return socket.readyState;
+                            }
+                    }
+                },
+                transmit,
+                transmitToOthers,
+                transmitToAll,
+                disconnect() {
+                    _disconnect();
+                },
+                replace() {
+                    _replace(true);
+                },
+                ignore,
+                remove,
+            };
+
+            const _peer = {
+                address,
+                ...peer,
+            };
+
+            const _peerIndex = peers[protocol].findIndex((peer) => peer.address === address);
+            if (_peerIndex === -1) {
+                if (peers[protocol].filter(peer => peer).length < MIN_NUMBER_OF_PUBLIC_PEERS) {
+                    peers[protocol].push(_peer);
+                }
+            } else {
+                peers[protocol][_peerIndex] = _peer;
+            }
+
+            switch (protocol) {
+                case COMMUNICATION_PROTOCOLS.TCP:
+                    const net = await import('node:net');
+                    socket = new net.Socket();
+                    socket.connect(port, address, function () {
+                        that.emit('network', {
+                            publicPeers: publicPeers[COMMUNICATION_PROTOCOLS.TCP],
+                            peers: peers[COMMUNICATION_PROTOCOLS.TCP].filter(peer => peer?.readyState() === 'open').map(peer => peer.address),
+                        });
+
+                        shouldReconnect = true;
+                        rotationTimeout = setTimeout(_replace, rotationPeriod);
+
+                        let buffer = new Uint8Array(0);
+
+                        socket.on('data', function (data) {
+                            if (buffer.length === 0 && data.byteLength < REQUEST_RESPONSE_HEADER.LENGTH) {
+                                return ignore();
+                            }
+
+                            const buffer2 = new Uint8Array(buffer.byteLength + data.byteLength);
+                            buffer2.set(buffer, 0);
+                            buffer2.set(new Uint8Array(data.buffer), buffer.byteLength);
+                            buffer = buffer2;
+                            let remainingBytes = buffer.byteLength;
+
+                            while (remainingBytes > 0) {
+                                const size = messageSize(buffer);
+                                if (size <= remainingBytes) {
+                                    _receiveCallback(buffer[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], buffer.slice(REQUEST_RESPONSE_HEADER.LENGTH, size), _peer);
+                                    buffer = buffer.slice(size);
+                                } else {
+                                    break;
+                                }
+                                remainingBytes -= size;
+                            }
+                        });
+
+                        socket.on('close', function () {
+                            that.emit('network', {
+                                publicPeers: publicPeers[COMMUNICATION_PROTOCOLS.TCP],
+                                peers: peers[COMMUNICATION_PROTOCOLS.TCP].filter(peer => peer?.readyState() === 'open').map(peer => peer.address),
+                            });
+                            _replace();
+                        });
+                    });
+
+                    socket.on('error', function () {});
+
+                    break;
+            }
         };
 
-        const _peer = {
-            address,
-            ...peer,
-        };
-
-        const _peerIndex = peers[protocol].findIndex((peer) => peer.address === address);
-        if (_peerIndex === -1) {
-            peers[protocol].push(_peer);
-        } else {
-            peers[protocol][_peerIndex] = _peer;
-        }
-
-        switch (protocol) {
-            case COMMUNICATION_PROTOCOLS.TCP:
-                const net = await import('node:net');
-                socket = new net.Socket();
-                socket.connect(port, address, function () {
-                    shouldReconnect = true;
-                    rotationTimeout = setTimeout(_replace, rotationPeriod);
-
-                    let buffer = new Uint8Array(0);
-
-                    socket.on('data', function (data) {
-                        if (buffer.length === 0 && data.byteLength < REQUEST_RESPONSE_HEADER.LENGTH) {
-                            return ignore();
-                        }
-
-                        const buffer2 = new Uint8Array(buffer.byteLength + data.byteLength);
-                        buffer2.set(buffer, 0);
-                        buffer2.set(new Uint8Array(data.buffer), buffer.byteLength);
-                        buffer = buffer2;
-                        let remainingBytes = buffer.byteLength;
-                    
-                        while (remainingBytes > 0) {
-                            const size = messageSize(buffer);
-                            if (size <= remainingBytes) {
-                                _receiveCallback(buffer[REQUEST_RESPONSE_HEADER.TYPE_OFFSET], buffer.slice(REQUEST_RESPONSE_HEADER.LENGTH, size), _peer);
-                                buffer = buffer.slice(size);
-                            } else {
-                                break;
-                            }
-                            remainingBytes -= size;
-                        }
-                    });
-                
-                    socket.on('close', function () {
-                        _replace();
-                    });
-                });
-
-                socket.on('error', function () {});
-
-                break;
-        }
-    };
-
-    return {
-        get numberOfPeers() {
-            return numberOfPeers;
-        },
-        connect(options = []) {
-            for (let protocol in peers) {
-                if (peers.hasOwnProperty(protocol)) {
-                    for (const peer of peers[COMMUNICATION_PROTOCOLS.TCP]) {
-                        peer.connect();
-                    }
-                }
-            }
-
-
-            for (let i = 0; i < options.length; i++) {
-                if (typeof options[i] === 'string') {
-                    options[i] = {
-                        address: options[i],
-                    };
-                } else if (options[i].address === undefined) {
-                    throw new Error('Invalid options, missing address.');
-                }
-            }
-
-            const uniqueAddresses = new Set();
-            for (let i = 0; i < options.length; i++) {
-                uniqueAddresses.add(options[i].address);
-            }
-
-            if (numberOfPeers + uniqueAddresses.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
-                throw new Error('Insuffient number of peers');
-            }
-
-            for (let i = 0; i < options.length; i++) {    
-                if (options[i].protocol === undefined) {
-                    options[i].protocol = COMMUNICATION_PROTOCOLS.DEFAULT;
-                } else {
-                    let supportsProtocol = false;
-                    for (let protocol in COMMUNICATION_PROTOCOLS) {
-                        if (COMMUNICATION_PROTOCOLS.hasOwnProperty(protocol)) {
-                            if (options[i].protocol === COMMUNICATION_PROTOCOLS[protocol]) {
-                                supportsProtocol = true;
-                                break;
+        return Object.assign(
+            this,
+            {
+                get numberOfPeers() {
+                    return numberOfPeers;
+                },
+                connect(options = []) {
+                    for (let protocol in peers) {
+                        if (peers.hasOwnProperty(protocol)) {
+                            for (const peer of peers[COMMUNICATION_PROTOCOLS.TCP]) {
+                                peer.connect();
                             }
                         }
                     }
-                    if (!supportsProtocol) {
-                        throw new Error(`Unknown protocol ${options[i].protocol}`);
-                    }
-                }
-        
-                if (options[i].port === undefined) {
-                    options[i].port = CORE_PORT;
-                }
 
-                if (options[i].rotationPeriod === undefined) {
-                    options[i].rotationPeriod = PEER_ROTATION_PERIOD;
-                }
 
-                if (initialPeers.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
-                    initialPeers.add(options[i].address);
-                }
+                    for (let i = 0; i < options.length; i++) {
+                        if (typeof options[i] === 'string') {
+                            options[i] = {
+                                address: options[i],
+                            };
+                        } else if (options[i].address === undefined) {
+                            throw new Error('Invalid options, missing address.');
+                        }
+                    }
 
-                _connect(options[i], numberOfPeers++);
-            }
-        },
-        disconnect() {
-            for (let protocol in peers) {
-                if (peers.hasOwnProperty(protocol)) {
-                    for (const peer of peers[protocol]) {
-                        peer.diconnect();
+                    const uniqueAddresses = new Set();
+                    for (let i = 0; i < options.length; i++) {
+                        uniqueAddresses.add(options[i].address);
                     }
-                }
-            }
 
-        },
-        replace() {
-            for (let protocol in peers) {
-                if (peers.hasOwnProperty(protocol)) {
-                    for (const peer of peers[protocol]) {
-                        peer.replace();
+                    if (numberOfPeers + uniqueAddresses.size < MIN_NUMBER_OF_PUBLIC_PEERS) {
+                        throw new Error('Insuffient number of peers');
                     }
-                }
-            }
-        },
-        reset(options) {
-            initialPeers.clear();
-            initialHandshakingPeers.clear();
-            initiallyExchangedPeers.length = 0;
-            initialHandshakesDone = false;
-            for (let protocol in peers) {
-                if (peers.hasOwnProperty(protocol)) {
-                    publicPeers[protocol] = [];
-                    for (const peer of peers[protocol]) {
-                        peer.remove();
+
+                    for (let i = 0; i < options.length; i++) {
+                        if (options[i].protocol === undefined) {
+                            options[i].protocol = COMMUNICATION_PROTOCOLS.DEFAULT;
+                        } else {
+                            let supportsProtocol = false;
+                            for (let protocol in COMMUNICATION_PROTOCOLS) {
+                                if (COMMUNICATION_PROTOCOLS.hasOwnProperty(protocol)) {
+                                    if (options[i].protocol === COMMUNICATION_PROTOCOLS[protocol]) {
+                                        supportsProtocol = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!supportsProtocol) {
+                                throw new Error(`Unknown protocol ${options[i].protocol}`);
+                            }
+                        }
+
+                        if (options[i].port === undefined) {
+                            options[i].port = CORE_PORT;
+                        }
+
+                        if (options[i].rotationPeriod === undefined) {
+                            options[i].rotationPeriod = PEER_ROTATION_PERIOD;
+                        }
+
+                        _connect(options[i], numberOfPeers++);
                     }
-                }
-            }
-            numberOfPeers = 0;
-            this.connect(options);
-        },
-        transmit(message) {
-            for (let protocol in peers) {
-                if (peers.hasOwnProperty(protocol)) {
-                    publicPeers[protocol] = [];
-                    for (const peer of peers[protocol]) {
-                        peer.transmit(message);
+                },
+                disconnect() {
+                    for (let protocol in peers) {
+                        if (peers.hasOwnProperty(protocol)) {
+                            for (const peer of peers[protocol]) {
+                                peer.diconnect();
+                            }
+                        }
                     }
-                }
-            }
-        },
-    }
+                },
+                replace() {
+                    for (let protocol in peers) {
+                        if (peers.hasOwnProperty(protocol)) {
+                            for (const peer of peers[protocol]) {
+                                peer.replace();
+                            }
+                        }
+                    }
+                },
+                reset(options) {
+                    initialPeers.clear();
+                    initialHandshakingPeers.clear();
+                    initiallyExchangedPeers.length = 0;
+                    initialHandshakesDone = false;
+                    for (let protocol in peers) {
+                        if (peers.hasOwnProperty(protocol)) {
+                            publicPeers[protocol] = [];
+                            for (const peer of peers[protocol]) {
+                                peer.remove();
+                            }
+                        }
+                    }
+                    numberOfPeers = 0;
+                    this.connect(options);
+                },
+                transmit(message) {
+                    for (let protocol in peers) {
+                        if (peers.hasOwnProperty(protocol)) {
+                            publicPeers[protocol] = [];
+                            for (const peer of peers[protocol]) {
+                                peer.transmit(message);
+                            }
+                        }
+                    }
+                },
+            },
+            EventEmitter.prototype,
+        );
+    }.call({});
 };

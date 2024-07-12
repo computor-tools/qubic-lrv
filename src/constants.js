@@ -60,6 +60,15 @@ export const QUORUM = Math.floor((2 / 3) * NUMBER_OF_COMPUTORS) + 1;
 
 export const SPECTRUM_DEPTH = 24;
 
+export const ASSETS_DEPTH = 24;
+
+export const ASSET_TYPES = {
+    EMPTY: 0,
+    ISSUANCE: 1,
+    OWNERSHIP: 2,
+    POSSESSION: 3,
+};
+
 export const TARGET_TICK_DURATION = 3000;
 export const MAX_NUMBER_OF_TICKS_PER_EPOCH = (((((60 * 60 * 24 * 7) / (TARGET_TICK_DURATION / 1000)) + NUMBER_OF_COMPUTORS - 1) / NUMBER_OF_COMPUTORS) * NUMBER_OF_COMPUTORS);
 
@@ -69,3 +78,5 @@ export const MAX_AMOUNT = ISSUANCE_RATE * 1000n;
 export const MAX_NUMBER_OF_CONTRACTS = 1024;
 
 export const TICK_TRANSACTIONS_PUBLICATION_OFFSET = 2; // must be only 2.
+
+export const CONTRACTS = ['', 'Qx'];
